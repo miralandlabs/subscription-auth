@@ -1,0 +1,33 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "src/bin/auth_api.rs",
+      "use": "vercel-rust@4.0.8",
+      "config": {
+        "env": {
+          "CARGO_HOME": "/tmp/cargo",
+          "RUSTUP_HOME": "/tmp/rustup"
+        }
+      }
+    },
+    {
+      "src": "public/**/*",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    { "src": "/health", "dest": "/src/bin/auth_api", "methods": ["GET", "HEAD", "OPTIONS"] },
+    { "src": "/.well-known/jwks.json", "dest": "/src/bin/auth_api", "methods": ["GET", "HEAD", "OPTIONS"] },
+    { "src": "/openapi.json", "dest": "/public/openapi.json" },
+    { "src": "/v1/services/(?<wallet>[^/]+)/challenge", "dest": "/src/bin/auth_api", "methods": ["GET", "HEAD", "OPTIONS"] },
+    { "src": "/v1/services/(?<wallet>[^/]+)/register", "dest": "/src/bin/auth_api", "methods": ["POST", "OPTIONS"] },
+    { "src": "/v1/services/(?<wallet>[^/]+)/update", "dest": "/src/bin/auth_api", "methods": ["POST", "OPTIONS"] },
+    { "src": "/v1/services/(?<wallet>[^/]+)/retire", "dest": "/src/bin/auth_api", "methods": ["POST", "OPTIONS"] },
+    { "src": "/v1/services/(?<wallet>[^/]+)/subscriptions", "dest": "/src/bin/auth_api", "methods": ["GET", "HEAD", "OPTIONS"] },
+    { "src": "/v1/tokens/issue", "dest": "/src/bin/auth_api", "methods": ["POST", "OPTIONS"] },
+    { "src": "/v1/tokens/revoke", "dest": "/src/bin/auth_api", "methods": ["POST", "OPTIONS"] },
+    { "src": "/v1/tokens/introspect", "dest": "/src/bin/auth_api", "methods": ["POST", "OPTIONS"] },
+    { "src": "/v1/revocations", "dest": "/src/bin/auth_api", "methods": ["GET", "HEAD", "OPTIONS"] }
+  ]
+}

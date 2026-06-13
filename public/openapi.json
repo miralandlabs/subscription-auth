@@ -1,0 +1,43 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "subscription-auth",
+    "version": "0.1.0",
+    "description": "Hosted subscription JWT signing oracle"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check"
+      }
+    },
+    "/.well-known/jwks.json": {
+      "get": {
+        "summary": "JWKS for RS256 verification"
+      }
+    },
+    "/v1/services/{wallet}/challenge": {
+      "get": {
+        "summary": "Build wallet-signed challenge",
+        "parameters": [
+          { "name": "wallet", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "action", "in": "query", "required": true, "schema": { "type": "string", "enum": ["register", "issue", "revoke", "update"] } }
+        ]
+      }
+    },
+    "/v1/tokens/issue": {
+      "post": {
+        "summary": "Mint RS256 JWT after wallet-signed challenge"
+      }
+    },
+    "/v1/revocations": {
+      "get": {
+        "summary": "Revocation delta feed by jti",
+        "parameters": [
+          { "name": "service_id", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "since", "in": "query", "schema": { "type": "string", "format": "date-time" } }
+        ]
+      }
+    }
+  }
+}
