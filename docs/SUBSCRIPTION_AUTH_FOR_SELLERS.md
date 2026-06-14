@@ -98,7 +98,7 @@ After x402 settle on `/subscribe`, the seller calls auth **`POST /v1/tokens/issu
 node scripts/e2e-tier-b-auth.mjs --keypair /path/to/seller-keypair.json
 ```
 
-**Full stack** (pr402 + local seller + buyer): [starter Tier B example](https://github.com/miralandlabs/x402-subscription-starter/tree/main/examples/tier-b-preview-e2e). x402 hub operators: `tools/e2e-subscription-tier-b.sh`.
+**Full stack** (pr402 + local seller + buyer): [starter Tier B example](https://github.com/miralandlabs/x402-subscription-starter/tree/main/examples/tier-b-preview-e2e) — run seller and buyer in two terminals.
 
 ---
 

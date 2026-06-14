@@ -77,13 +77,7 @@ node scripts/register-service.mjs --keypair ../../demo-wallets/seller-keypair.js
 node scripts/e2e-tier-b-auth.mjs --keypair ../../demo-wallets/seller-keypair.json
 ```
 
-**Full stack** (pr402 Preview + local seller + buyer), from x402 hub root:
-
-```bash
-tools/e2e-subscription-tier-b.sh
-```
-
-Example walkthrough: [x402-subscription-starter/examples/tier-b-preview-e2e](../x402-subscription-starter/examples/tier-b-preview-e2e/README.md)
+**Full stack** (pr402 Preview + local seller + buyer): [starter Tier B example](https://github.com/miralandlabs/x402-subscription-starter/tree/main/examples/tier-b-preview-e2e) — run seller and buyer scripts in two terminals.
 
 ---
 
