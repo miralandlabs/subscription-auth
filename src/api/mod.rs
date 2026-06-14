@@ -138,8 +138,7 @@ pub async fn handle_jwks(state: Arc<AppState>) -> Response<Body> {
 
 pub async fn handle_challenge(state: Arc<AppState>, wallet: String, query: &str) -> Response<Body> {
     let result = async {
-        let params: Vec<(String, String)> = serde_qs::from_str(query).unwrap_or_default();
-        let map: std::collections::HashMap<String, String> = params.into_iter().collect();
+        let map = crate::http_util::parse_query_map(query);
         let action_str = map
             .get("action")
             .ok_or_else(|| Error::BadRequest("action query param required".into()))?;
@@ -553,8 +552,7 @@ pub async fn handle_introspect(state: Arc<AppState>, auth_header: Option<&str>) 
 
 pub async fn handle_revocations(state: Arc<AppState>, query: &str) -> Response<Body> {
     let result = async {
-        let params: Vec<(String, String)> = serde_qs::from_str(query).unwrap_or_default();
-        let map: std::collections::HashMap<String, String> = params.into_iter().collect();
+        let map = crate::http_util::parse_query_map(query);
         let service_id = map
             .get("service_id")
             .ok_or_else(|| Error::BadRequest("service_id required".into()))?;
@@ -594,8 +592,7 @@ pub async fn handle_list_subscriptions(
     query: &str,
 ) -> Response<Body> {
     let result = async {
-        let params: Vec<(String, String)> = serde_qs::from_str(query).unwrap_or_default();
-        let map: std::collections::HashMap<String, String> = params.into_iter().collect();
+        let map = crate::http_util::parse_query_map(query);
         let service_id = map.get("service_id").map(|s| s.as_str());
         let message = map.get("message");
         let signature = map.get("signature");

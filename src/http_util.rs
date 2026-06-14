@@ -40,3 +40,26 @@ pub fn parse_wallet_path(path: &str, suffix: &str) -> Option<String> {
     }
     Some(wallet.to_string())
 }
+
+/// Standard `application/x-www-form-urlencoded` query string (`a=1&b=2`).
+pub fn parse_query_map(query: &str) -> std::collections::HashMap<String, String> {
+    if query.trim().is_empty() {
+        return std::collections::HashMap::new();
+    }
+    serde_qs::from_str(query).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_query_map_standard() {
+        let m = parse_query_map("action=register&service_id=e2e.local.ipay.sh");
+        assert_eq!(m.get("action").map(String::as_str), Some("register"));
+        assert_eq!(
+            m.get("service_id").map(String::as_str),
+            Some("e2e.local.ipay.sh")
+        );
+    }
+}
