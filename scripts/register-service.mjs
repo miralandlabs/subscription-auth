@@ -96,6 +96,21 @@ function walletFromKeypair(path) {
   return base58Encode(raw.slice(32, 64));
 }
 
+async function fetchRetry(url, init, attempts = 5, delayMs = 2000) {
+  let last;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await fetch(url, init);
+    } catch (err) {
+      last = err;
+      if (i < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw last;
+}
+
 async function main() {
   let wallet = arg('wallet');
   if (!wallet || wallet === true) {
@@ -121,7 +136,7 @@ async function main() {
     return;
   }
 
-  const chRes = await fetch(challengeUrl.toString());
+  const chRes = await fetchRetry(challengeUrl.toString());
   const chText = await chRes.text();
   if (!chRes.ok) {
     throw new Error(`challenge failed ${chRes.status}: ${chText}`);
@@ -141,7 +156,7 @@ async function main() {
     resources_allowlist: allowlist,
   };
 
-  const regRes = await fetch(registerUrl, {
+  const regRes = await fetchRetry(registerUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

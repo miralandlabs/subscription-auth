@@ -1,21 +1,38 @@
 # subscription-auth
 
-General-purpose hosted subscription JWT signing oracle: RS256 mint/revoke, JWKS, wallet-signed service registration, revocation delta feed.
+Hosted subscription JWT service: RS256 issue/revoke, JWKS, wallet-signed service registration, revocation delta feed.
 
-x402/pr402 sellers integrate via [`@pr402/subscription-seller`](../x402-subscription-seller) Tier B (`SUBSCRIPTION_MODE=tier-b` in starter).
+x402 sellers use **Tier B** via [`@pr402/subscription-seller`](https://www.npmjs.com/package/@pr402/subscription-seller) + `SUBSCRIPTION_MODE=tier-b`.
+
+**Seller guide:** [docs/SUBSCRIPTION_AUTH_FOR_SELLERS.md](docs/SUBSCRIPTION_AUTH_FOR_SELLERS.md)
+
+---
+
+## Seller integration (Tier B)
+
+1. Deploy this service (below) or use a hosted instance (e.g. `https://preview.auth.ipay.sh` for devnet tests).
+2. **Register once:** `node scripts/register-service.mjs --keypair … --service-id … --service-url …`
+3. On your seller: `SUBSCRIPTION_MODE=tier-b`, auth URLs, `SUBSCRIPTION_AUTH_SERVICE_ID`, merchant secret key.
+4. Flow unchanged for buyers: pay on `/subscribe` → Bearer on data routes.
+
+Payment (`402` + pr402) stays on **your seller** — this service only signs JWTs after you settle.
+
+---
 
 ## Deploy (Vercel + Postgres)
 
-1. Create Postgres (Neon/Supabase); apply schema:
+1. Postgres (Neon/Supabase); apply schema:
    ```bash
    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/init.sql
    ```
-2. Generate RSA keypair:
+2. RSA keypair:
    ```bash
    openssl genrsa -out private.pem 2048
    ```
-3. Set Vercel env: `DATABASE_URL`, `SUBSCRIPTION_AUTH_HMAC_SECRET`, `SUBSCRIPTION_AUTH_RSA_PRIVATE_KEY_PEM`, `SUBSCRIPTION_AUTH_KEY_ID`, `SUBSCRIPTION_AUTH_ISS`
-4. Deploy; verify `GET /health`, `GET /.well-known/jwks.json`
+3. Vercel env: `DATABASE_URL`, `SUBSCRIPTION_AUTH_HMAC_SECRET`, `SUBSCRIPTION_AUTH_RSA_PRIVATE_KEY_PEM`, `SUBSCRIPTION_AUTH_KEY_ID`, `SUBSCRIPTION_AUTH_ISS`
+4. Deploy → `GET /health`, `GET /.well-known/jwks.json`
+
+---
 
 ## API (v1)
 
@@ -32,39 +49,43 @@ x402/pr402 sellers integrate via [`@pr402/subscription-seller`](../x402-subscrip
 | POST | `/v1/tokens/introspect` | Bearer token |
 | GET | `/v1/revocations?service_id=&since=` | — |
 
-See [docs/subscription-jwt-auth-challenge-spec.md](../docs/subscription-jwt-auth-challenge-spec.md).
+Challenge domain: `x402 subscription auth v1` — see `src/challenge_auth.rs`.
 
-## Revocation UX
+---
+
+## Revocation
 
 Sellers poll `GET /v1/revocations` every ~60s (fail-open). Revocation may take up to one poll interval.
 
-## Testing (Preview + npm SDK)
+---
 
-Scripts in [`scripts/`](scripts/) — copy [`scripts/env.example`](scripts/env.example) to `scripts/.env.local` for local overrides.
+## Testing
+
+Scripts in [`scripts/`](scripts/) — optional `scripts/.env.local` from [`scripts/env.example`](scripts/env.example).
 
 ```bash
-# Smoke (no secrets)
+# Health + JWKS (retries on flaky TLS)
 ./scripts/smoke-preview.sh
 
-# Published npm package integrity (temp dir — does not touch starter)
+# npm SDK smoke
 node scripts/verify-npm-package.mjs
 
 # Register demo seller (one-time)
 node scripts/register-service.mjs --keypair ../../demo-wallets/seller-keypair.json
 
-# Auth-only issue/verify/revoke (no pr402 payment)
+# Auth-only: issue → JWKS verify → revoke (no pr402 payment)
 node scripts/e2e-tier-b-auth.mjs --keypair ../../demo-wallets/seller-keypair.json
 ```
 
-Full-stack (pr402 Preview + local starter + buyer client): from x402 hub root,
+**Full stack** (pr402 Preview + local seller + buyer), from x402 hub root:
 
 ```bash
 tools/e2e-subscription-tier-b.sh
 ```
 
-**Note:** wallet `GET .../challenge?action=...` requires query-string parsing fix in `http_util::parse_query_map` — redeploy Preview after pulling latest `subscription-auth` before register/issue scripts will succeed against `preview.auth.ipay.sh`.
+Example walkthrough: [x402-subscription-starter/examples/tier-b-preview-e2e](../x402-subscription-starter/examples/tier-b-preview-e2e/README.md)
 
-See [x402-subscription-starter/examples/tier-b-preview-e2e](../x402-subscription-starter/examples/tier-b-preview-e2e/README.md).
+---
 
 ## License
 
