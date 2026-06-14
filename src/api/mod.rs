@@ -10,11 +10,9 @@ use {
 };
 
 use crate::{
-    challenge_auth::{
-        self, minify_json_array, Action, ChallengeBuildParams, ParsedChallenge,
-    },
+    challenge_auth::{self, minify_json_array, Action, ChallengeBuildParams, ParsedChallenge},
     db::ServiceRow,
-    error::{Error, into_vercel_response},
+    error::{into_vercel_response, Error},
     http_util::{cors_options, json_response, parse_wallet_path},
     jwt::{self, decode_bearer_token, decode_unverified_claims},
     service_id::validate_service_id,
@@ -77,7 +75,7 @@ async fn verify_and_consume(
         message,
         signature,
     )
-    .map_err(|e| Error::Unauthorized(e))?;
+    .map_err(Error::Unauthorized)?;
 
     if parsed.action != expected_action {
         return Err(Error::Unauthorized("action mismatch".into()));
@@ -89,7 +87,9 @@ async fn verify_and_consume(
         .await
         .map_err(|e| Error::Internal(e.to_string()))?;
     if !consumed {
-        return Err(Error::Unauthorized("nonce replay or expired challenge".into()));
+        return Err(Error::Unauthorized(
+            "nonce replay or expired challenge".into(),
+        ));
     }
     Ok(parsed)
 }
@@ -136,11 +136,7 @@ pub async fn handle_jwks(state: Arc<AppState>) -> Response<Body> {
     }
 }
 
-pub async fn handle_challenge(
-    state: Arc<AppState>,
-    wallet: String,
-    query: &str,
-) -> Response<Body> {
+pub async fn handle_challenge(state: Arc<AppState>, wallet: String, query: &str) -> Response<Body> {
     let result = async {
         let params: Vec<(String, String)> = serde_qs::from_str(query).unwrap_or_default();
         let map: std::collections::HashMap<String, String> = params.into_iter().collect();
@@ -211,7 +207,7 @@ pub async fn handle_challenge(
             CHALLENGE_TTL_SEC,
             build,
         )
-        .map_err(|e| Error::BadRequest(e))?;
+        .map_err(Error::BadRequest)?;
 
         let nonce = message
             .lines()
@@ -253,11 +249,13 @@ pub async fn handle_register(
         wallet_matches_path(&wallet, &parsed.wallet)?;
 
         if parsed.service_id.as_deref() != Some(body.service_id.as_str()) {
-            return Err(Error::Unauthorized("service_id not bound in challenge".into()));
+            return Err(Error::Unauthorized(
+                "service_id not bound in challenge".into(),
+            ));
         }
 
-        let allowlist_json = minify_json_array(&body.resources_allowlist)
-            .map_err(Error::BadRequest)?;
+        let allowlist_json =
+            minify_json_array(&body.resources_allowlist).map_err(Error::BadRequest)?;
         if parsed.resources_allowlist_json.as_deref() != Some(allowlist_json.as_str()) {
             return Err(Error::Unauthorized(
                 "resources_allowlist not bound in challenge".into(),
@@ -265,7 +263,12 @@ pub async fn handle_register(
         }
 
         let db = state.require_db()?;
-        if db.get_service(&body.service_id).await.map_err(|e| Error::Internal(e.to_string()))?.is_some() {
+        if db
+            .get_service(&body.service_id)
+            .await
+            .map_err(|e| Error::Internal(e.to_string()))?
+            .is_some()
+        {
             return Err(Error::Forbidden("service_id already registered".into()));
         }
 
@@ -312,8 +315,8 @@ pub async fn handle_update(
         .await?;
         wallet_matches_path(&wallet, &parsed.wallet)?;
 
-        let allowlist_json = minify_json_array(&body.resources_allowlist)
-            .map_err(Error::BadRequest)?;
+        let allowlist_json =
+            minify_json_array(&body.resources_allowlist).map_err(Error::BadRequest)?;
         if parsed.service_id.as_deref() != Some(body.service_id.as_str()) {
             return Err(Error::Unauthorized("service_id mismatch".into()));
         }
@@ -385,10 +388,7 @@ pub async fn handle_retire(
     into_vercel_response(result)
 }
 
-pub async fn handle_issue(
-    state: Arc<AppState>,
-    body_text: String,
-) -> Response<Body> {
+pub async fn handle_issue(state: Arc<AppState>, body_text: String) -> Response<Body> {
     let result = async {
         let body: IssueBody = serde_json::from_str(&body_text)
             .map_err(|e| Error::BadRequest(format!("invalid json: {e}")))?;
@@ -432,18 +432,11 @@ pub async fn handle_issue(
         }
 
         if !resources_subset_of_allowlist(&resources, &service.resources_allowlist) {
-            return Err(Error::Forbidden(
-                "resources not subset of allowlist".into(),
-            ));
+            return Err(Error::Forbidden("resources not subset of allowlist".into()));
         }
 
-        let issued = jwt::issue_rs256_token(
-            &state.config,
-            &service_id,
-            &payer,
-            &tier,
-            resources.clone(),
-        )?;
+        let issued =
+            jwt::issue_rs256_token(&state.config, &service_id, &payer, &tier, resources.clone())?;
 
         state
             .require_db()?
@@ -475,10 +468,7 @@ pub async fn handle_issue(
     into_vercel_response(result)
 }
 
-pub async fn handle_revoke(
-    state: Arc<AppState>,
-    body_text: String,
-) -> Response<Body> {
+pub async fn handle_revoke(state: Arc<AppState>, body_text: String) -> Response<Body> {
     let result = async {
         let body: RevokeBody = serde_json::from_str(&body_text)
             .map_err(|e| Error::BadRequest(format!("invalid json: {e}")))?;
@@ -524,10 +514,7 @@ pub async fn handle_revoke(
     into_vercel_response(result)
 }
 
-pub async fn handle_introspect(
-    state: Arc<AppState>,
-    auth_header: Option<&str>,
-) -> Response<Body> {
+pub async fn handle_introspect(state: Arc<AppState>, auth_header: Option<&str>) -> Response<Body> {
     let result = async {
         let token = decode_bearer_token(auth_header)?;
         let claims = decode_unverified_claims(&token)?;
@@ -539,7 +526,11 @@ pub async fn handle_introspect(
 
         let mut revoked = false;
         if let Ok(db) = state.require_db() {
-            if let Some(row) = db.get_token(jti).await.map_err(|e| Error::Internal(e.to_string()))? {
+            if let Some(row) = db
+                .get_token(jti)
+                .await
+                .map_err(|e| Error::Internal(e.to_string()))?
+            {
                 revoked = row.revoked_at.is_some();
             }
         }
@@ -560,10 +551,7 @@ pub async fn handle_introspect(
     into_vercel_response(result)
 }
 
-pub async fn handle_revocations(
-    state: Arc<AppState>,
-    query: &str,
-) -> Response<Body> {
+pub async fn handle_revocations(state: Arc<AppState>, query: &str) -> Response<Body> {
     let result = async {
         let params: Vec<(String, String)> = serde_qs::from_str(query).unwrap_or_default();
         let map: std::collections::HashMap<String, String> = params.into_iter().collect();
@@ -580,8 +568,7 @@ pub async fn handle_revocations(
             })
             .transpose()?;
 
-        let window_start =
-            Utc::now() - chrono::Duration::days(state.config.revocation_window_days);
+        let window_start = Utc::now() - chrono::Duration::days(state.config.revocation_window_days);
 
         let db = state.require_db()?;
         let (revoked_jti, cursor, complete) = db
@@ -623,7 +610,7 @@ pub async fn handle_list_subscriptions(
             message.unwrap(),
             signature.unwrap(),
         )
-        .map_err(|e| Error::Unauthorized(e))?;
+        .map_err(Error::Unauthorized)?;
         wallet_matches_path(&wallet, &parsed.wallet)?;
 
         let rows = state

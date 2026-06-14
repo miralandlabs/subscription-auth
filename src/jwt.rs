@@ -76,7 +76,8 @@ pub fn issue_rs256_token(
 }
 
 pub fn decode_bearer_token(auth_header: Option<&str>) -> Result<String, Error> {
-    let header = auth_header.ok_or_else(|| Error::Unauthorized("missing Authorization header".into()))?;
+    let header =
+        auth_header.ok_or_else(|| Error::Unauthorized("missing Authorization header".into()))?;
     let token = header
         .strip_prefix("Bearer ")
         .ok_or_else(|| Error::Unauthorized("expected Bearer token".into()))?
@@ -93,11 +94,7 @@ pub fn decode_unverified_claims(token: &str) -> Result<TokenClaims, Error> {
     validation.insecure_disable_signature_validation();
     validation.validate_exp = false;
 
-    let data = decode::<TokenClaims>(
-        token,
-        &DecodingKey::from_secret(&[]),
-        &validation,
-    )
-    .map_err(|e| Error::Unauthorized(format!("invalid token: {e}")))?;
+    let data = decode::<TokenClaims>(token, &DecodingKey::from_secret(&[]), &validation)
+        .map_err(|e| Error::Unauthorized(format!("invalid token: {e}")))?;
     Ok(data.claims)
 }

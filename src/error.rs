@@ -38,10 +38,16 @@ impl Error {
             Error::Unauthorized(msg) => (VercelStatusCode::UNAUTHORIZED, "UNAUTHORIZED", msg),
             Error::Forbidden(msg) => (VercelStatusCode::FORBIDDEN, "FORBIDDEN", msg),
             Error::NotFound(msg) => (VercelStatusCode::NOT_FOUND, "NOT_FOUND", msg),
-            Error::ServiceUnavailable(msg) => {
-                (VercelStatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE", msg)
-            }
-            Error::Internal(msg) => (VercelStatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", msg),
+            Error::ServiceUnavailable(msg) => (
+                VercelStatusCode::SERVICE_UNAVAILABLE,
+                "SERVICE_UNAVAILABLE",
+                msg,
+            ),
+            Error::Internal(msg) => (
+                VercelStatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                msg,
+            ),
         };
 
         Response::builder()
@@ -49,7 +55,10 @@ impl Error {
             .header("Content-Type", "application/json")
             .header("Access-Control-Allow-Origin", "*")
             .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            .header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            .header(
+                "Access-Control-Allow-Headers",
+                "Content-Type, Authorization",
+            )
             .header("X-Date", date)
             .body(Body::Text(
                 json!({ "error": code, "message": message }).to_string(),

@@ -1,11 +1,8 @@
 use {
     base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine},
-        rsa::{
-            pkcs1::DecodeRsaPrivateKey,
-            pkcs8::DecodePrivateKey,
-            traits::PublicKeyParts,
-            RsaPrivateKey,
-        },
+    rsa::{
+        pkcs1::DecodeRsaPrivateKey, pkcs8::DecodePrivateKey, traits::PublicKeyParts, RsaPrivateKey,
+    },
     serde_json::{json, Value},
 };
 
@@ -34,7 +31,10 @@ pub fn build_jwks(current: &Config, db_keys: Vec<(String, Value)>) -> Value {
         keys.push(jwk);
     }
     for (kid, jwk) in db_keys {
-        if keys.iter().any(|k| k.get("kid").and_then(|v| v.as_str()) == Some(kid.as_str())) {
+        if keys
+            .iter()
+            .any(|k| k.get("kid").and_then(|v| v.as_str()) == Some(kid.as_str()))
+        {
             continue;
         }
         keys.push(jwk);

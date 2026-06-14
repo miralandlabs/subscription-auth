@@ -7,7 +7,10 @@ pub fn json_response<T: serde::Serialize>(status: u16, value: &T) -> Response<Bo
         .header("Content-Type", "application/json")
         .header("Access-Control-Allow-Origin", "*")
         .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        .header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        .header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization",
+        )
         .body(Body::Text(
             serde_json::to_string(value).unwrap_or_else(|_| "{}".into()),
         ))
@@ -19,7 +22,10 @@ pub fn cors_options() -> Response<Body> {
         .status(VercelStatusCode::NO_CONTENT)
         .header("Access-Control-Allow-Origin", "*")
         .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        .header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        .header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization",
+        )
         .header("Access-Control-Max-Age", "86400")
         .body(Body::Empty)
         .unwrap()

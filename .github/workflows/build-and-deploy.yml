@@ -1,0 +1,140 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+# GitHub repo secrets (same pattern as solrisk / pr402):
+#   VERCEL_TOKEN  — Vercel account token
+#   ORG_ID        — Vercel team/org id
+#   PROJECT_ID    — Vercel project id for subscription-auth
+#
+# Runtime env (DATABASE_URL, SUBSCRIPTION_AUTH_*, etc.) live in Vercel — not in this workflow.
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    outputs:
+      deployment_url: ${{ steps.deploy_vercel.outputs.deployment_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Rust code
+        run: cargo check --bin auth_api
+
+      - name: Run Clippy
+        run: cargo clippy --bin auth_api -- -D warnings
+
+      - name: Run tests
+        run: cargo test --lib
+
+      - name: Verify static deploy artifacts
+        run: |
+          test -f public/openapi.json
+          echo "public/openapi.json ready for Vercel static route"
+
+      # vercel-rust vs current CLI: pin 52.x and use prebuilt deploy (see pr402 / x402-buy-spl-token).
+      - name: Install Vercel CLI
+        run: npm install --global vercel@52.2.1
+
+      - name: Link to Existing Vercel Project
+        run: |
+          mkdir -p .vercel
+          cat > .vercel/project.json << EOF
+          {
+            "orgId": "${{ secrets.ORG_ID }}",
+            "projectId": "${{ secrets.PROJECT_ID }}"
+          }
+          EOF
+
+      - name: Set Environment Variables
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "VERCEL_ENV=production" >> $GITHUB_ENV
+          else
+            echo "VERCEL_ENV=preview" >> $GITHUB_ENV
+          fi
+
+      - name: Deploy to Vercel (prebuilt)
+        id: deploy_vercel
+        run: |
+          set -euo pipefail
+          if [ "${VERCEL_ENV}" = "production" ]; then
+            vercel pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+            vercel build --prod --token="${{ secrets.VERCEL_TOKEN }}"
+            DEPLOY_OUTPUT=$(vercel deploy --prebuilt --yes --prod --token="${{ secrets.VERCEL_TOKEN }}")
+          else
+            vercel pull --yes --environment=preview --token="${{ secrets.VERCEL_TOKEN }}"
+            vercel build --token="${{ secrets.VERCEL_TOKEN }}"
+            DEPLOY_OUTPUT=$(vercel deploy --prebuilt --yes --token="${{ secrets.VERCEL_TOKEN }}")
+          fi
+
+          DEPLOYMENT_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://[^[:space:]]+\.vercel\.app' | head -1)
+          echo "DEPLOYMENT_URL=$DEPLOYMENT_URL" >> $GITHUB_ENV
+          echo "deployment_url=$DEPLOYMENT_URL" >> "$GITHUB_OUTPUT"
+
+          echo "✅ Deployment successful!"
+          echo "Environment: ${VERCEL_ENV}"
+          echo "Deployment URL: $DEPLOYMENT_URL"
+        env:
+          VERCEL_ORG_ID: ${{ secrets.ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.PROJECT_ID }}
+          VERCEL_ENV: ${{ env.VERCEL_ENV }}
+
+      - name: Smoke test
+        run: |
+          URL="${DEPLOYMENT_URL:-}"
+          if [ -z "$URL" ]; then
+            echo "No deployment URL captured; skipping smoke test."
+            exit 0
+          fi
+
+          echo "Checking /health on $URL ..."
+          HEALTH_STATUS=$(curl -sS -o /tmp/health.json -w "%{http_code}" "$URL/health")
+          if [ "$HEALTH_STATUS" != "200" ]; then
+            echo "::warning::/health returned $HEALTH_STATUS (expected 200). Cold start may need more time."
+          else
+            echo "✅ /health returned 200"
+            cat /tmp/health.json
+          fi
+
+          echo "Checking /.well-known/jwks.json on $URL ..."
+          JWKS_STATUS=$(curl -sS -o /tmp/jwks.json -w "%{http_code}" "$URL/.well-known/jwks.json")
+          if [ "$JWKS_STATUS" != "200" ]; then
+            echo "::warning::/.well-known/jwks.json returned $JWKS_STATUS (expected 200 if SUBSCRIPTION_AUTH_RSA_* env set on Vercel)."
+          else
+            echo "✅ /.well-known/jwks.json returned 200"
+          fi
+
+      - name: Print Final URLs
+        run: |
+          echo "🎉 Deployment completed!"
+          echo "Environment: ${{ env.VERCEL_ENV }}"
+          echo "Deployment URL: ${{ env.DEPLOYMENT_URL }}"
+
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "Production: set SUBSCRIPTION_AUTH_ISS to your production domain in Vercel env"
+          else
+            echo "Preview: ${{ env.DEPLOYMENT_URL }} (use for integration testing)"
+          fi

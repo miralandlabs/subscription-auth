@@ -352,8 +352,8 @@ mod tests {
         )
         .unwrap();
         let sig = kp.sign_message(msg.as_bytes());
-        let parsed = verify_challenge_submission(&secret(), &wallet, &msg, &sig.to_string())
-            .unwrap();
+        let parsed =
+            verify_challenge_submission(&secret(), &wallet, &msg, &sig.to_string()).unwrap();
         assert_eq!(parsed.action, Action::Register);
         assert_eq!(parsed.service_id.as_deref(), Some("fifa.example.com"));
     }
@@ -380,8 +380,8 @@ mod tests {
         )
         .unwrap();
         let sig = kp.sign_message(msg.as_bytes());
-        let parsed = verify_challenge_submission(&secret(), &wallet, &msg, &sig.to_string())
-            .unwrap();
+        let parsed =
+            verify_challenge_submission(&secret(), &wallet, &msg, &sig.to_string()).unwrap();
         assert_eq!(parsed.action, Action::Issue);
         assert_eq!(parsed.tier.as_deref(), Some("hourly"));
     }

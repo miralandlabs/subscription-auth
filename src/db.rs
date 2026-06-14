@@ -119,7 +119,12 @@ impl AuthDb {
         }
     }
 
-    pub async fn insert_nonce(&self, wallet: &str, nonce: &str, expires_at: DateTime<Utc>) -> Result<(), Error> {
+    pub async fn insert_nonce(
+        &self,
+        wallet: &str,
+        nonce: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), Error> {
         let client = self.conn().await?;
         self.exec_in_tx(
             client,
@@ -208,7 +213,13 @@ impl AuthDb {
                 (service_id, merchant_wallet, service_url, resources_allowlist, tier_bundles)
             VALUES ($1, $2, $3, $4, $5)
             "#,
-            &[&service_id, &merchant_wallet, &service_url, &resources_allowlist, &tier_bundles],
+            &[
+                &service_id,
+                &merchant_wallet,
+                &service_url,
+                &resources_allowlist,
+                &tier_bundles,
+            ],
             "insert service",
         )
         .await?;
@@ -233,14 +244,23 @@ impl AuthDb {
                     updated_at = NOW()
                 WHERE service_id = $1 AND merchant_wallet = $2 AND status = 'active'
                 "#,
-                &[&service_id, &merchant_wallet, &resources_allowlist, &tier_bundles],
+                &[
+                    &service_id,
+                    &merchant_wallet,
+                    &resources_allowlist,
+                    &tier_bundles,
+                ],
                 "update service",
             )
             .await?;
         Ok(rows > 0)
     }
 
-    pub async fn retire_service(&self, service_id: &str, merchant_wallet: &str) -> Result<bool, Error> {
+    pub async fn retire_service(
+        &self,
+        service_id: &str,
+        merchant_wallet: &str,
+    ) -> Result<bool, Error> {
         let client = self.conn().await?;
         let rows = self
             .exec_in_tx(
@@ -257,6 +277,7 @@ impl AuthDb {
         Ok(rows > 0)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_token(
         &self,
         jti: Uuid,
@@ -275,7 +296,15 @@ impl AuthDb {
                 (jti, service_id, payer, tier, resources, issued_at, expires_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
-            &[&jti, &service_id, &payer, &tier, &resources, &issued_at, &expires_at],
+            &[
+                &jti,
+                &service_id,
+                &payer,
+                &tier,
+                &resources,
+                &issued_at,
+                &expires_at,
+            ],
             "insert token",
         )
         .await?;
@@ -484,7 +513,9 @@ impl AuthDb {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(e)) => {
                 error!(error = %e, "SET LOCAL statement_timeout failed");
-                Err(Error::Internal(format!("SET LOCAL statement_timeout failed: {e}")))
+                Err(Error::Internal(format!(
+                    "SET LOCAL statement_timeout failed: {e}"
+                )))
             }
             Err(_) => Err(Error::Internal(format!(
                 "SET LOCAL statement_timeout timed out after {:?}",

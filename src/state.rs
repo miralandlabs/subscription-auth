@@ -1,10 +1,5 @@
 use {
-    crate::{
-        config::Config,
-        db::AuthDb,
-        error::Error,
-        jwks,
-    },
+    crate::{config::Config, db::AuthDb, error::Error, jwks},
     std::sync::Arc,
 };
 
