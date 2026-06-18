@@ -169,9 +169,17 @@ async function main() {
     regJson = { raw: regText };
   }
 
-  if (regRes.status === 403 && String(regText).includes('already registered')) {
-    console.log('OK: service_id already registered (idempotent)');
-    console.log(regJson);
+  if (
+    regRes.status === 403 &&
+    (String(regText).includes('already registered') ||
+      regJson?.message === 'service_id already registered')
+  ) {
+    console.log('OK: service_id already registered (nothing to do — exit 0)');
+    console.log(`  service_id:  ${serviceId}`);
+    console.log(`  service_url: ${serviceUrl} (unchanged; auth keeps the URL from first register)`);
+    console.log(
+      '  To change service_url later, use subscription-auth action=update (not register).',
+    );
     return;
   }
   if (!regRes.ok) {
