@@ -145,6 +145,7 @@ Scripts retry fetch/curl 5× with 2s backoff.
 | Doc | Use |
 |-----|-----|
 | [SUBSCRIPTION_PATTERN.md](https://github.com/miralandlabs/x402/blob/master/SUBSCRIPTION_PATTERN.md) | Wire contract, errors, checklists |
+| [YIELD_QUALIFIED_SUBSCRIPTION.md](YIELD_QUALIFIED_SUBSCRIPTION.md) | Hold-qualified tiers — seller entitlement, not pr402 |
 | [README.md](../README.md) | Auth API + deploy |
 | [x402-subscription-starter](https://github.com/miralandlabs/x402-subscription-starter) | Forkable seller |
 | [x402-subscription-client](https://github.com/miralandlabs/x402-subscription-client) | Buyer SDK |

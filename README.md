@@ -6,6 +6,8 @@ x402 sellers use **Tier B** via [`@pr402/subscription-seller`](https://www.npmjs
 
 **Seller guide:** [docs/SUBSCRIPTION_AUTH_FOR_SELLERS.md](docs/SUBSCRIPTION_AUTH_FOR_SELLERS.md)
 
+**Optional entitlement pattern (not a pr402 rail):** [docs/YIELD_QUALIFIED_SUBSCRIPTION.md](docs/YIELD_QUALIFIED_SUBSCRIPTION.md) — hold ≥ threshold in yield/RWA mint → JWT extend without `exact` settle.
+
 ---
 
 ## Seller integration (Tier B)
@@ -75,6 +77,9 @@ node scripts/register-service.mjs --keypair ../../demo-wallets/seller-keypair.js
 
 # Auth-only: issue → JWKS verify → revoke (no pr402 payment)
 node scripts/e2e-tier-b-auth.mjs --keypair ../../demo-wallets/seller-keypair.json
+
+# Read-only hold-qualification spike (no npm deps)
+node scripts/check-hold-qualification.mjs --wallet <pubkey> --min-usd 300
 ```
 
 **Full stack** (pr402 Preview + local seller + buyer): [starter Tier B example](https://github.com/miralandlabs/x402-subscription-starter/tree/main/examples/tier-b-preview-e2e) — run seller and buyer scripts in two terminals.
