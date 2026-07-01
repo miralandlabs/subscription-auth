@@ -82,7 +82,7 @@ node scripts/e2e-tier-b-auth.mjs --keypair ../../demo-wallets/seller-keypair.jso
 node scripts/check-hold-qualification.mjs --wallet <pubkey> --min-usd 300
 ```
 
-**Full stack** (pr402 Preview + local seller + buyer): [starter Tier B example](https://github.com/miralandlabs/x402-subscription-starter/tree/main/examples/tier-b-preview-e2e) — run seller and buyer scripts in two terminals.
+**Full stack** (pr402 Preview + local seller + buyer): [starter Tier B example](https://github.com/miraland-labs/x402-subscription-starter/tree/main/examples/tier-b-preview-e2e) — run seller and buyer scripts in two terminals.
 
 ---
 
