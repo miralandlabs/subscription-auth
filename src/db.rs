@@ -62,7 +62,7 @@ impl AuthDb {
             recycling_method: RecyclingMethod::Clean,
         });
         cfg.pool = Some(PoolConfig {
-            max_size: 5,
+            max_size: 1,
             timeouts: deadpool_postgres::Timeouts {
                 wait: Some(Self::WAIT),
                 create: Some(Self::CREATE),
