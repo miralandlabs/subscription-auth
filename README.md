@@ -89,3 +89,4 @@ node scripts/check-hold-qualification.mjs --wallet <pubkey> --min-usd 300
 ## License
 
 MIT
+# Force redeploy Thu Jul  2 13:59:28 CST 2026
