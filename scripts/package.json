@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@pr402/subscription-seller": "0.1.0",
+    "dotenv": "^17.4.2",
+    "pg": "^8.22.0",
     "tweetnacl": "1.0.3"
   }
 }
