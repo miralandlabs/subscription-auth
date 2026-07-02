@@ -731,6 +731,8 @@ impl AuthDb {
             Self::discard_client(client, label, "commit failed");
             return Err(e);
         }
+        // Explicitly drop client to return it to pool
+        drop(client);
         Ok(result)
     }
 
@@ -763,6 +765,8 @@ impl AuthDb {
             Self::discard_client(client, label, "commit failed");
             return Err(e);
         }
+        // Explicitly drop client to return it to pool
+        drop(client);
         Ok(result)
     }
 
@@ -795,6 +799,8 @@ impl AuthDb {
             Self::discard_client(client, label, "commit failed");
             return Err(e);
         }
+        // Explicitly drop client to return it to pool
+        drop(client);
         Ok(result)
     }
 }
