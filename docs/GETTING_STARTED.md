@@ -1,199 +1,158 @@
-# 🚀 subscription-auth — Easy Step-by-Step Guide for New Sellers
+# 🚀 Gating an Existing Web2 API with pr402 Subscriptions
 
-If you're a new seller and cryptographically signing JWTs sounds confusing, don't worry. This guide is built for you. 
+If you have an existing Web2 API (e.g., built with Express, FastAPI, Go, etc.) and want to add an hourly, daily, or monthly paywall, you have **two main paths** to choose from. 
 
----
-
-## 💡 Do I really need to deploy this service? (Pick your path)
-
-Before you touch any code, choose the path that fits your existing setup:
-
-| Path | Difficulty | Extra Infrastructure | What you need to do |
-|:---|:---|:---|:---|
-| **1. Tier A (Local JWT)** | ⭐ *Easiest* | **None** (No Postgres, No Vercel) | Sign and verify tokens directly inside your existing Web2 server using a local secret key. |
-| **2. Shared Tier B (Hosted)** | ⭐⭐ *Easy* | **None** (No Postgres, No Vercel) | Register your service on a shared public auth service deployment (e.g., `https://preview.auth.ipay.sh`) and call their API to issue tokens. |
-| **3. Private Tier B (Self-Hosted)** | ⭐⭐⭐ *Advanced* | **Postgres DB + Vercel Account** | Deploy this repository to your own Vercel account and connect it to your own Postgres database. |
-
-*If you are an existing Web2 developer who just wants to add a gate quickly, choose **Path 1** or **Path 2**. You do not need to host this repository or set up a Postgres database!*
+Choose the one that fits your stack best:
 
 ---
 
-## 🛠️ Prerequisites (What you need)
+## 💡 Pick Your Path
 
-### For Path 1 & 2 (Easiest / No Server Deployment):
-1. **Node.js (v18+)** installed on your computer.
-2. A **Solana Keypair File** (a `.json` file containing a 64-byte array representing your seller wallet).
-   * Create one quickly if you don't have it:
-     ```bash
-     solana-keygen new --outfile seller-keypair.json --no-bip39-passphrase
-     ```
+| Feature | Path 1: Local JWT (Tier A) | Path 2: Centralized Service (Tier B) |
+|:---|:---|:---|
+| **What it is** | You sign and verify subscription tokens locally on your own server. | You use a shared, hosted auth oracle (e.g. `https://preview.auth.ipay.sh` for testing) to sign RS256 tokens. |
+| **Infrastructure** | 🟢 **None**. No database, no new servers. | 🟢 **None**. You call the public auth service API. |
+| **Token Type** | HS256 (Symmetric, secret key). | RS256 (Asymmetric, public/private keys + JWKS). |
+| **Best For** | Simple setup, fast integration into your existing server. | Advanced setups where third-party clients need to verify your tokens. |
 
-### For Path 3 (Self-Hosting your own Auth Server):
-1. All items above, plus:
-2. A **Postgres Database** (e.g. free tier from [Neon.tech](https://neon.tech) or [Supabase](https://supabase.com)).
-3. A **Vercel account** (free tier from [vercel.com](https://vercel.com)).
-
+> [!IMPORTANT]
+> **Production vs. Development Base URLs (Path 2):**
+> * Use **`https://preview.auth.ipay.sh`** exclusively for **integration testing and development**.
+> * Once going live, you **must** update your base URLs to the production endpoint: **`https://auth.ipay.sh`**.
 
 ---
 
-## 🏁 Step-by-Step Setup
-
-Decide whether you want to use a **Shared Hosted Instance** or **Self-Host** your own auth service.
-
----
-
-### 🌐 Option A: Use a Shared/Hosted Instance (Fastest, no DB/Vercel needed)
-If you do not want to set up Vercel or Postgres, you can use the public testing deployment: `https://preview.auth.ipay.sh` (or any other facilitator-provided deployment).
-1. Skip directly to **Step 4** (Register your Service).
-2. When running scripts or starting your Express server, use `https://preview.auth.ipay.sh` as your `SUBSCRIPTION_AUTH_BASE_URL`.
+## 🔑 Prerequisite: Your Seller Wallet
+For both paths, you need a Solana wallet keypair to act as your merchant identity.
+* If you don't have one, generate it using the Solana CLI:
+  ```bash
+  solana-keygen new --outfile seller-keypair.json --no-bip39-passphrase
+  ```
 
 ---
 
-### 🖥️ Option B: Self-Host your own Auth Server (Requires DB + Vercel)
-Follow these three steps only if you chose **Path 3** (Self-Hosting your own private oracle):
+## 🧭 Path 1: Local JWT (Tier A) — Easiest & Fastest
 
-#### Step 1: Run the Setup Wizard
-Open your terminal, go to the project directory, and run the guided setup script:
+You do not need to call any external auth services. You generate a random secret key and handle token signing and verification directly inside your existing Web2 code.
 
-```bash
-cd subscription-auth
-bash scripts/setup.sh --iss https://YOUR-VERCEL-DEPLOYMENT.vercel.app
+### 1. Configure your environment
+Create a random 32-byte secret key and add it to your `.env` file along with your wallet public key:
+```env
+JWT_SECRET=your-random-32-byte-hex-secret-key-here
+MERCHANT_WALLET=your-solana-wallet-public-key
 ```
-*(Replace `https://YOUR-VERCEL-DEPLOYMENT.vercel.app` with the URL you expect Vercel to give you. If you don't know it yet, you can use `https://my-auth-service.vercel.app` and update it later).*
 
-**What this does**:
-* Generates a secure RSA private key (`subscription-auth-private.pem`) in your root directory.
-* Generates a random HMAC secret.
-* Prints a block of environment variables. **Keep this open in your terminal!**
+### 2. Implementation (Node.js/Express Example)
+Install `jsonwebtoken` (or similar for your language):
+```bash
+npm install jsonwebtoken dotenv
+```
 
-#### Step 2: Initialize your Postgres Database
-1. Go to your Neon/Supabase dashboard and copy your **connection string** (it looks like `postgresql://user:pass@host/db?sslmode=require`).
-2. Run this command to create the required tables:
-   ```bash
-   psql "YOUR_POSTGRES_CONNECTION_STRING" -f migrations/init.sql
-   ```
-*(If you don't have `psql` installed, you can open your SQL editor in Neon/Supabase, copy the contents of `migrations/init.sql`, and run it as a query).*
+Drop this into your existing API codebase:
 
-#### Step 3: Deploy to Vercel
-Deploy the `subscription-auth` service so it's live on the internet:
+```javascript
+import dotenv from 'dotenv';
+import jwt from 'jsonwebtoken';
+dotenv.config();
 
-1. Install the Vercel CLI (if you haven't already):
-   ```bash
-   npm install -g vercel
-   ```
-2. Run the deployment:
-   ```bash
-   vercel
-   ```
-3. When prompted, link it to your Vercel account.
-4. **Important**: Add the environment variables that the setup script printed in **Step 1** to your Vercel dashboard (**Settings -> Environment Variables**):
-   * `DATABASE_URL` (your Postgres connection string)
-   * `SUBSCRIPTION_AUTH_HMAC_SECRET`
-   * `SUBSCRIPTION_AUTH_RSA_PRIVATE_KEY_PEM`
-   * `SUBSCRIPTION_AUTH_KEY_ID`
-   * `SUBSCRIPTION_AUTH_ISS`
-5. Deploy to production:
-   ```bash
-   vercel --prod
-   ```
+const JWT_SECRET = process.env.JWT_SECRET;
 
-Copy your live deployment URL (e.g., `https://subscription-auth-xyz.vercel.app`).
+// 1. CALL THIS AFTER PAYMENT SETTLEMENT
+// Call this when the buyer completes the pr402 payment flow.
+export function issueSubscriptionToken(buyerWallet, tier = 'monthly') {
+  const durations = {
+    hourly: 60 * 60,
+    daily: 24 * 60 * 60,
+    monthly: 30 * 24 * 60 * 60,
+  };
 
+  const seconds = durations[tier] || durations.monthly;
+
+  return jwt.sign(
+    { 
+      payer: buyerWallet,
+      tier: tier 
+    }, 
+    JWT_SECRET, 
+    { expiresIn: seconds }
+  );
+}
+
+// 2. EXPRESS MIDDLEWARE TO SECURE YOUR ROUTE
+export function requireSubscription(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'MISSING_TOKEN', message: 'Bearer token required' });
+  }
+
+  const token = authHeader.slice(7);
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.subscription = decoded; // Attach subscription info to the request
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'TOKEN_EXPIRED_OR_INVALID', message: err.message });
+  }
+}
+```
 
 ---
 
-### Step 4: Register your Service (One-Time)
-Now register your service on your new deployment. This tells the auth service: *"My server at `api.myproduct.com`, owned by my wallet, is allowed to request tokens."*
+## 🌐 Path 2: Centralized Service (Tier B) — Shared Hosted Instance
 
-Run the registration script:
+You use the shared public deployment of the `subscription-auth` service.
+* **Dev/Testing**: Use `https://preview.auth.ipay.sh` (devnet).
+* **Production**: Use `https://auth.ipay.sh` (mainnet).
+
+The service signs tokens using a private RSA key, and your server verifies them using the public JWKS endpoint.
+
+### 1. Register your service once
+You need to let the centralized service know your `service_id` and wallet. Since the helper registration scripts are in this repository, clone the repo locally to run the one-time registration:
 
 ```bash
-# 1. Install script dependencies
-cd scripts && npm install && cd ..
+# Clone the repository locally
+git clone https://github.com/miraland-labs/x402.git
+cd x402/subscription-auth/scripts
+npm install
 
-# 2. Run the registration
-# (If using Option A, replace base-url with https://preview.auth.ipay.sh)
-node scripts/register-service.mjs \
+# Register your product (Replace URL with https://auth.ipay.sh for production)
+node register-service.mjs \
   --keypair /path/to/your/seller-keypair.json \
-  --base-url https://YOUR-VERCEL-DEPLOYMENT.vercel.app \
+  --base-url https://preview.auth.ipay.sh \
   --service-id api.myproduct.com \
   --service-url https://api.myproduct.com \
-  --allowlist "/api/v1/data,/api/v1/feed"
+  --allowlist "/api/v1/data"
+```
+*(Replace `api.myproduct.com` with your API domain name, or use `YourWalletAddress:appName` if you don't have a domain).*
+
+### 2. Configure your Web2 API environment
+Add these values to your existing server's `.env` file:
+```env
+# Switch these URLs to https://auth.ipay.sh when going production!
+SUBSCRIPTION_AUTH_BASE_URL=https://preview.auth.ipay.sh
+SUBSCRIPTION_AUTH_ISS=https://preview.auth.ipay.sh
+SUBSCRIPTION_AUTH_SERVICE_ID=api.myproduct.com
+MERCHANT_WALLET=your-registered-wallet-public-key
+MERCHANT_KEYPAIR_PATH=/path/to/your/seller-keypair.json
 ```
 
-> 💡 **What is a `service-id`?** It's a namespace for your product. To prevent people from stealing names, it *must* have a dot or colon in it (like a domain name or `walletAddress:appName`). Flat names like `mycoolapi` will be rejected.
->
-> 💡 **What is an `allowlist`?** A comma-separated list of API endpoints users can access with this token. If you aren't sure, use `"*"` (allows everything).
-
----
-
-### Step 5: Test the Integration with our Minimal Seller Server
-We've built a mock Express server in `examples/minimal-seller/` so you can see how everything hooks together.
-
-1. Go to the example folder:
-   ```bash
-   cd examples/minimal-seller
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Copy `.env.example` to `.env`:
-   ```bash
-   cp .env.example .env
-   ```
-4. Open the `.env` file and fill in your details:
-   * `SUBSCRIPTION_AUTH_BASE_URL` (your Vercel deployment URL)
-   * `SUBSCRIPTION_AUTH_ISS` (same as above)
-   * `SUBSCRIPTION_AUTH_SERVICE_ID` (`api.myproduct.com` or whatever you registered)
-   * `MERCHANT_KEYPAIR_PATH` (absolute path to your Solana `seller-keypair.json`)
-   * `MERCHANT_WALLET` (your public wallet key)
-5. Start the mock server:
-   ```bash
-   npm run dev
-   ```
-
-Open your browser to `http://localhost:3000`. You can follow the interactive buttons on screen to:
-1. **Simulate a Payment**: Clicking this calls the auth service to issue a token.
-2. **Access Protected Data**: Try accessing the data route with and without the token to see Express middleware verification in action.
-3. **Revoke a Token**: Revoke the token to witness the backend pull feed blocking access.
-
----
-
-## 📝 Integration Cheatsheet (For your production app)
-
-When you write your actual application, copy the pattern in `examples/minimal-seller/subscription.js`:
-
-### 1. Issuing a token when a buyer pays
-After you verify that a user has paid, call the auth service to issue a token:
-
-```js
-import { issueToken } from './subscription.js';
-
-app.post('/api/subscribe', async (req, res) => {
-  // 1. Process payment (e.g. via Miraland/Solana)
-  // ...
-  
-  // 2. Issue the JWT
-  const tokenInfo = await issueToken({
-    payer: req.body.payerWallet, 
-    tier: 'monthly',
-    resources: ['/api/v1/data'] // Must match a subset of your allowlist
-  });
-
-  // 3. Return token to the client
-  res.json({ token: tokenInfo.token });
-});
+### 3. Implementation (Node.js/Express Example)
+Install dependencies in your API project:
+```bash
+npm install @pr402/subscription-seller jose tweetnacl dotenv
 ```
 
-### 2. Protecting your API routes
-Secure any data route using the verification middleware:
+Drop the module from our examples directory ([**`examples/minimal-seller/subscription.js`**](../examples/minimal-seller/subscription.js)) directly into your codebase. It contains:
+- `issueToken({ payer, tier })`: Contacts the centralized auth service to fetch a signed token.
+- `requireSubscription`: Middleware that validates the incoming token against the public JWKS endpoint (and polls for revocations automatically every 60 seconds).
+- `revokeToken(jti)`: Instantly blocks a token.
 
-```js
+Secure your endpoint:
+```javascript
 import { requireSubscription } from './subscription.js';
 
 app.get('/api/v1/data', requireSubscription, (req, res) => {
-  // Access is only granted if a valid, non-revoked token is in the Authorization header
   res.json({
     message: "Here is your paid data!",
     buyerWallet: req.subscription.payer
@@ -203,16 +162,14 @@ app.get('/api/v1/data', requireSubscription, (req, res) => {
 
 ---
 
-## ❓ FAQ & Troubleshooting
+## 🧪 Testing your Integration
+Once either path is implemented, you can verify your Express route is locked by testing it using curl:
 
-#### "Error: RSA encoding key"
-Your `SUBSCRIPTION_AUTH_RSA_PRIVATE_KEY_PEM` env var in Vercel is formatted incorrectly. The newlines must be converted to `\n` so it fits on a single line. Re-run `bash scripts/setup.sh` to get the pre-formatted copy-paste line.
+```bash
+# 1. Accessing without a token should fail (401)
+curl http://localhost:3000/api/v1/data
+# Expected: {"error":"MISSING_TOKEN", ...}
 
-#### "Conflict: service_id already registered"
-This is totally fine. It means you (or someone else) already registered that `service_id`. You don't need to register it again. Move directly to starting your server.
-
-#### "too many pending challenges"
-To prevent database spamming, a wallet can only have 10 active login challenges outstanding at once. Wait 10 minutes for them to expire, then try again.
-
-#### "Token validation failed: JWT Expired"
-The buyer's token has expired. Prompt them to make a payment and fetch a new token via your `/pay-and-subscribe` endpoint.
+# 2. Accessing with a valid token should pass (200)
+curl -H "Authorization: Bearer <your_jwt_here>" http://localhost:3000/api/v1/data
+```
