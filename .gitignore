@@ -9,3 +9,4 @@ scripts/.env.local
 scripts/.env
 
 node_modules
+.vercel
