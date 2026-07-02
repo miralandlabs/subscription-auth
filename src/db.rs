@@ -62,7 +62,7 @@ impl AuthDb {
         let mut cfg = Config::new();
         cfg.url = Some(url_string.clone());
         cfg.manager = Some(ManagerConfig {
-            recycling_method: RecyclingMethod::Clean,
+            recycling_method: RecyclingMethod::Fast,
         });
         cfg.pool = Some(PoolConfig {
             max_size: 5,
