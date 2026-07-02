@@ -1,4 +1,6 @@
--- Idempotent brownfield — duplicate of init.sql DDL
+-- Idempotent brownfield — mirrors init.sql for migration-tool users (Flyway, golang-migrate, etc.)
+-- CANONICAL SOURCE: migrations/init.sql (apply directly for greenfield deployments).
+-- If you change the schema, update BOTH init.sql AND this file to keep them in sync.
 CREATE TABLE IF NOT EXISTS subscription_auth_services (
     service_id            TEXT PRIMARY KEY,
     merchant_wallet       TEXT NOT NULL,

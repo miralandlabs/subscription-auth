@@ -31,7 +31,10 @@ pub fn validate_service_id(service_id: &str) -> Result<(), Error> {
     }
 
     Err(Error::BadRequest(
-        "service_id must be namespaced (DNS-style e.g. api.example.com or wallet:slug)".into(),
+        "service_id must use your domain or a wallet prefix to prevent name squatting.\n\
+         Examples: \"api.myproduct.com\", \"myapp.example.com\", or \"YourWallet:myapp\"\n\
+         Flat names like \"myapp\" are not allowed."
+            .into(),
     ))
 }
 

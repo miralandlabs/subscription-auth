@@ -1,0 +1,16 @@
+{
+  "name": "subscription-auth-scripts",
+  "version": "1.0.0",
+  "description": "Dev/test scripts for subscription-auth. Run `npm install` here once before using e2e-tier-b-auth.mjs.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "node e2e-tier-b-auth.mjs",
+    "register": "node register-service.mjs",
+    "rotate-key": "node rotate-key.mjs"
+  },
+  "dependencies": {
+    "@pr402/subscription-seller": "0.1.0",
+    "tweetnacl": "1.0.3"
+  }
+}

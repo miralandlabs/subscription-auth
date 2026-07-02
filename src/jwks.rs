@@ -4,6 +4,7 @@ use {
         pkcs1::DecodeRsaPrivateKey, pkcs8::DecodePrivateKey, traits::PublicKeyParts, RsaPrivateKey,
     },
     serde_json::{json, Value},
+    tracing::error,
 };
 
 use crate::{config::Config, error::Error};
@@ -27,8 +28,13 @@ pub fn public_jwk_from_private_pem(pem: &str, kid: &str) -> Result<Value, Error>
 
 pub fn build_jwks(current: &Config, db_keys: Vec<(String, Value)>) -> Value {
     let mut keys: Vec<Value> = Vec::new();
-    if let Ok(jwk) = public_jwk_from_private_pem(&current.rsa_private_key_pem, &current.key_id) {
-        keys.push(jwk);
+    match public_jwk_from_private_pem(&current.rsa_private_key_pem, &current.key_id) {
+        Ok(jwk) => keys.push(jwk),
+        Err(e) => {
+            // Log at ERROR level: an empty keys array means all incoming JWTs will fail
+            // signature verification until the operator fixes the key configuration.
+            error!(error = %e, key_id = %current.key_id, "failed to build JWK from private key — JWKS will be empty");
+        }
     }
     for (kid, jwk) in db_keys {
         if keys

@@ -137,63 +137,36 @@ async function introspect(token) {
   return JSON.parse(text);
 }
 
-async function installSdkRunner() {
+/**
+ * Prefer pre-installed deps from scripts/node_modules (run `npm install` in scripts/ once).
+ * Falls back to a temp install only when the local package is absent, so CI environments
+ * can pre-install dependencies and avoid live npm downloads on every test run.
+ */
+async function useOrInstallSdk() {
+  const localModules = join(__dirname, 'node_modules', '@pr402', 'subscription-seller');
+  if (existsSync(localModules)) {
+    // Fast path: use already-installed local deps
+    return { dir: __dirname, runnerPath: join(__dirname, '_e2e_runner.mjs'), cleanup: () => {} };
+  }
+
+  // Slow path: temp install (first-time or CI without pre-install)
+  console.log('Local node_modules not found; installing to temp dir (run `npm install` in scripts/ to avoid this)...');
   const dir = mkdtempSync(join(tmpdir(), 'sub-seller-e2e-'));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ type: 'module', private: true }, null, 2));
-  execSync('npm install @pr402/subscription-seller@0.1.0', { cwd: dir, stdio: 'pipe' });
-
-  const runnerPath = join(dir, 'run.mjs');
-  writeFileSync(runnerPath, `
-import {
-  issueTokenViaAuthService,
-  verifyTokenWithJwks,
-  createRevocationPollCache,
-} from '@pr402/subscription-seller';
-import { readFileSync } from 'node:fs';
-
-const input = JSON.parse(readFileSync(0, 'utf8'));
-const { baseUrl, serviceId, expectedIss, payer, wallet, secretKeyB64, mode, jti } = input;
-
-const secretKey = Buffer.from(secretKeyB64, 'base64');
-async function signMessage(message) {
-  const nacl = await import('tweetnacl');
-  const sig = nacl.default.sign.detached(message, secretKey);
-  return Buffer.from(sig).toString('base64');
-}
-
-if (mode === 'revoke-only') {
-  console.log(JSON.stringify({ skipped: 'revoke-only handled by parent' }));
-  process.exit(0);
-}
-
-const issued = await issueTokenViaAuthService({
-  baseUrl,
-  merchantWallet: wallet,
-  serviceId,
-  payer,
-  tier: 'hourly',
-  resources: ['*'],
-  signMessage,
-});
-
-const payload = await verifyTokenWithJwks(issued.token, {
-  jwksUrl: baseUrl + '/.well-known/jwks.json',
-  expectedIss,
-  expectedSub: serviceId,
-});
-
-const cache = createRevocationPollCache({ baseUrl, serviceId, intervalSec: 60 });
-await cache.pollOnce();
-
-console.log(JSON.stringify({
-  token: issued.token,
-  jti: issued.jti,
-  payer: payload.payer,
-  tier: payload.tier,
-}));
-`);
-
-  return { dir, runnerPath };
+  try {
+    execSync('npm install @pr402/subscription-seller@0.1.0 tweetnacl@1.0.3', {
+      cwd: dir,
+      stdio: ['pipe', 'pipe', 'inherit'], // show stderr so install errors are visible
+    });
+  } catch (err) {
+    rmSync(dir, { recursive: true, force: true });
+    throw new Error(`npm install failed: ${err.message}`);
+  }
+  return {
+    dir,
+    runnerPath: join(dir, '_e2e_runner.mjs'),
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
 }
 
 async function main() {
@@ -218,17 +191,53 @@ async function main() {
     return;
   }
 
-  const { dir, runnerPath } = await installSdkRunner();
+  const { dir, runnerPath, cleanup } = await useOrInstallSdk();
+
+  // Write the inline runner script to the resolved dir
+  writeFileSync(runnerPath, `
+import {
+  issueTokenViaAuthService,
+  verifyTokenWithJwks,
+  createRevocationPollCache,
+} from '@pr402/subscription-seller';
+import { readFileSync } from 'node:fs';
+
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const { baseUrl, serviceId, expectedIss, payer, wallet, secretKeyB64 } = input;
+
+const secretKey = Buffer.from(secretKeyB64, 'base64');
+async function signMessage(message) {
+  const nacl = await import('tweetnacl');
+  const sig = nacl.default.sign.detached(message, secretKey);
+  return Buffer.from(sig).toString('base64');
+}
+
+const issued = await issueTokenViaAuthService({
+  baseUrl,
+  merchantWallet: wallet,
+  serviceId,
+  payer,
+  tier: 'hourly',
+  resources: ['*'],
+  signMessage,
+});
+
+const payload = await verifyTokenWithJwks(issued.token, {
+  jwksUrl: baseUrl + '/.well-known/jwks.json',
+  expectedIss,
+  expectedSub: serviceId,
+});
+
+const cache = createRevocationPollCache({ baseUrl, serviceId, intervalSec: 60 });
+await cache.pollOnce();
+
+console.log(JSON.stringify({ token: issued.token, jti: issued.jti, payer: payload.payer, tier: payload.tier }));
+`);
+
   try {
-    execSync(`npm install tweetnacl@1.0.3`, { cwd: dir, stdio: 'pipe' });
     const input = JSON.stringify({
-      baseUrl,
-      serviceId,
-      expectedIss,
-      payer,
-      wallet,
+      baseUrl, serviceId, expectedIss, payer, wallet,
       secretKeyB64: Buffer.from(secretKey).toString('base64'),
-      mode: 'full',
     });
     const out = execSync(`node ${runnerPath}`, { cwd: dir, input, encoding: 'utf8' });
     const { token, jti, payer: gotPayer, tier } = JSON.parse(out.trim().split('\n').pop());
@@ -246,7 +255,7 @@ async function main() {
     console.log('OK: revoke + introspect inactive');
     console.log('auth-only E2E passed');
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    cleanup();
   }
 }
 

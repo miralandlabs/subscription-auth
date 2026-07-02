@@ -73,7 +73,18 @@ impl AuthDb {
 
         let mut builder =
             SslConnector::builder(SslMethod::tls()).map_err(|e| Error::Internal(e.to_string()))?;
-        builder.set_verify(openssl::ssl::SslVerifyMode::NONE);
+        // Default: verify server certificate against system CA bundle (protects against MITM).
+        // Most managed Postgres hosts (Neon, Supabase, RDS) use certs from well-known CAs.
+        // Set SUBSCRIPTION_AUTH_SSL_NO_VERIFY=true ONLY for local dev with self-signed certs.
+        let no_verify = std::env::var("SUBSCRIPTION_AUTH_SSL_NO_VERIFY")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+        if no_verify {
+            tracing::warn!("SUBSCRIPTION_AUTH_SSL_NO_VERIFY=true: TLS certificate verification disabled. Do NOT use in production.");
+            builder.set_verify(openssl::ssl::SslVerifyMode::NONE);
+        } else {
+            builder.set_verify(openssl::ssl::SslVerifyMode::PEER);
+        }
         let tls = MakeTlsConnector::new(builder.build());
         let pool = cfg
             .create_pool(Some(Runtime::Tokio1), tls)
@@ -154,6 +165,24 @@ impl AuthDb {
             )
             .await?;
         Ok(row.is_some())
+    }
+
+    /// Count non-expired outstanding nonces for a wallet.
+    /// Used to enforce a per-wallet rate limit on /challenge.
+    pub async fn count_active_nonces(&self, wallet: &str) -> Result<i64, Error> {
+        let client = self.conn().await?;
+        let row = self
+            .query_opt_in_tx(
+                client,
+                r#"
+                SELECT COUNT(*) AS n FROM subscription_auth_nonces
+                WHERE wallet = $1 AND expires_at > NOW()
+                "#,
+                &[&wallet],
+                "count active nonces",
+            )
+            .await?;
+        Ok(row.map(|r| r.get::<_, i64>("n")).unwrap_or(0))
     }
 
     pub async fn consume_nonce(&self, wallet: &str, nonce: &str) -> Result<bool, Error> {
@@ -393,7 +422,14 @@ impl AuthDb {
         let complete = rows.len() as i64 <= limit;
         let take = rows.len().min(limit as usize);
         let mut jtis = Vec::with_capacity(take);
-        let mut cursor = since_ts;
+        // When there are rows, cursor = timestamp of the last row (for incremental polling).
+        // When there are NO rows, advance to now() so the next poll doesn't re-scan the
+        // same empty window — without this, `cursor == since_ts` and the caller loops forever.
+        let mut cursor = if rows.is_empty() {
+            Utc::now()
+        } else {
+            since_ts
+        };
         for row in rows.iter().take(take) {
             jtis.push(row.get::<_, String>("jti"));
             cursor = row.get("revoked_at");
@@ -422,49 +458,96 @@ impl AuthDb {
             .collect())
     }
 
+    /// List tokens for a merchant wallet, most-recent first.
+    /// `before` is an optional keyset cursor (issued_at of the last row from the previous page).
+    /// Returns (rows, has_more). Query limit+1 rows internally; if more than `limit` come back,
+    /// there is a next page and the caller should pass the last row's `issued_at` as `before`.
     pub async fn list_subscriptions(
         &self,
         merchant_wallet: &str,
         service_id: Option<&str>,
         limit: i64,
-    ) -> Result<Vec<TokenRow>, Error> {
+        before: Option<DateTime<Utc>>,
+    ) -> Result<(Vec<TokenRow>, bool), Error> {
         let client = self.conn().await?;
-        let rows = if let Some(sid) = service_id {
-            self.query_in_tx(
-                client,
-                r#"
-                SELECT t.jti, t.service_id, t.payer, t.tier, t.resources,
-                       t.issued_at, t.expires_at, t.revoked_at
-                FROM subscription_auth_tokens t
-                JOIN subscription_auth_services s ON s.service_id = t.service_id
-                WHERE s.merchant_wallet = $1 AND t.service_id = $2
-                ORDER BY t.issued_at DESC
-                LIMIT $3
-                "#,
-                &[&merchant_wallet, &sid, &limit],
-                "list subscriptions",
-            )
-            .await?
-        } else {
-            self.query_in_tx(
-                client,
-                r#"
-                SELECT t.jti, t.service_id, t.payer, t.tier, t.resources,
-                       t.issued_at, t.expires_at, t.revoked_at
-                FROM subscription_auth_tokens t
-                JOIN subscription_auth_services s ON s.service_id = t.service_id
-                WHERE s.merchant_wallet = $1
-                ORDER BY t.issued_at DESC
-                LIMIT $2
-                "#,
-                &[&merchant_wallet, &limit],
-                "list subscriptions",
-            )
-            .await?
+        let fetch_limit = limit + 1; // fetch one extra to detect has_more
+        let rows = match (service_id, before) {
+            (Some(sid), Some(cursor)) => {
+                self.query_in_tx(
+                    client,
+                    r#"
+                    SELECT t.jti, t.service_id, t.payer, t.tier, t.resources,
+                           t.issued_at, t.expires_at, t.revoked_at
+                    FROM subscription_auth_tokens t
+                    JOIN subscription_auth_services s ON s.service_id = t.service_id
+                    WHERE s.merchant_wallet = $1 AND t.service_id = $2 AND t.issued_at < $3
+                    ORDER BY t.issued_at DESC
+                    LIMIT $4
+                    "#,
+                    &[&merchant_wallet, &sid, &cursor, &fetch_limit],
+                    "list subscriptions",
+                )
+                .await?
+            }
+            (Some(sid), None) => {
+                self.query_in_tx(
+                    client,
+                    r#"
+                    SELECT t.jti, t.service_id, t.payer, t.tier, t.resources,
+                           t.issued_at, t.expires_at, t.revoked_at
+                    FROM subscription_auth_tokens t
+                    JOIN subscription_auth_services s ON s.service_id = t.service_id
+                    WHERE s.merchant_wallet = $1 AND t.service_id = $2
+                    ORDER BY t.issued_at DESC
+                    LIMIT $3
+                    "#,
+                    &[&merchant_wallet, &sid, &fetch_limit],
+                    "list subscriptions",
+                )
+                .await?
+            }
+            (None, Some(cursor)) => {
+                self.query_in_tx(
+                    client,
+                    r#"
+                    SELECT t.jti, t.service_id, t.payer, t.tier, t.resources,
+                           t.issued_at, t.expires_at, t.revoked_at
+                    FROM subscription_auth_tokens t
+                    JOIN subscription_auth_services s ON s.service_id = t.service_id
+                    WHERE s.merchant_wallet = $1 AND t.issued_at < $2
+                    ORDER BY t.issued_at DESC
+                    LIMIT $3
+                    "#,
+                    &[&merchant_wallet, &cursor, &fetch_limit],
+                    "list subscriptions",
+                )
+                .await?
+            }
+            (None, None) => {
+                self.query_in_tx(
+                    client,
+                    r#"
+                    SELECT t.jti, t.service_id, t.payer, t.tier, t.resources,
+                           t.issued_at, t.expires_at, t.revoked_at
+                    FROM subscription_auth_tokens t
+                    JOIN subscription_auth_services s ON s.service_id = t.service_id
+                    WHERE s.merchant_wallet = $1
+                    ORDER BY t.issued_at DESC
+                    LIMIT $2
+                    "#,
+                    &[&merchant_wallet, &fetch_limit],
+                    "list subscriptions",
+                )
+                .await?
+            }
         };
 
-        Ok(rows
+        let has_more = rows.len() as i64 > limit;
+        let take = rows.len().min(limit as usize);
+
+        let items = rows
             .iter()
+            .take(take)
             .map(|r| TokenRow {
                 jti: r.get("jti"),
                 service_id: r.get("service_id"),
@@ -475,7 +558,8 @@ impl AuthDb {
                 expires_at: r.get("expires_at"),
                 revoked_at: r.get("revoked_at"),
             })
-            .collect())
+            .collect();
+        Ok((items, has_more))
     }
 
     // --- Transaction helpers (solrisk pattern) ---

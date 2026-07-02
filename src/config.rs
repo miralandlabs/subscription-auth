@@ -13,7 +13,9 @@ impl Config {
     pub fn from_env() -> Result<Self, Error> {
         let hmac_secret = std::env::var("SUBSCRIPTION_AUTH_HMAC_SECRET")
             .map_err(|_| Error::Internal("SUBSCRIPTION_AUTH_HMAC_SECRET not set".into()))?;
-        if hmac_secret.trim().len() < 32 {
+        // Check length on raw bytes (not trimmed) to ensure the full secret is adequate.
+        // Trimming before checking length would allow short secrets padded with spaces to pass.
+        if hmac_secret.len() < 32 {
             return Err(Error::Internal(
                 "SUBSCRIPTION_AUTH_HMAC_SECRET must be at least 32 bytes".into(),
             ));
