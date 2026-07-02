@@ -38,7 +38,6 @@ pub struct RegisterBody {
     pub service_url: String,
     pub resources_allowlist: Vec<String>,
     pub tier_bundles: Option<Value>,
-    pub recovery_wallet: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -242,23 +241,40 @@ pub async fn handle_challenge(state: Arc<AppState>, wallet: String, query: &str)
         let expires = DateTime::from_timestamp(expires_unix as i64, 0)
             .ok_or_else(|| Error::Internal("invalid expiry".into()))?;
 
-        // Rate-limit: cap outstanding (unexpired) nonces per wallet to 10
-        // to prevent flooding the nonce table via rapid /challenge calls.
-        const MAX_OUTSTANDING_NONCES: i64 = 10;
+        // Rate-limit: cap outstanding (unexpired) nonces per wallet to prevent
+        // flooding the nonce table via rapid /challenge calls.
+        // Configurable via SUBSCRIPTION_AUTH_MAX_NONCES_PER_WALLET (default: 10)
+        let max_nonces = std::env::var("SUBSCRIPTION_AUTH_MAX_NONCES_PER_WALLET")
+            .ok()
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(10)
+            .max(1); // Ensure at least 1
+
         let db = state.require_db()?;
         let active = db
             .count_active_nonces(&wallet)
             .await
             .map_err(|e| Error::Internal(e.to_string()))?;
-        if active >= MAX_OUTSTANDING_NONCES {
+        if active >= max_nonces {
             return Err(Error::BadRequest(format!(
-                "too many pending challenges for this wallet (max {MAX_OUTSTANDING_NONCES}); \
+                "too many pending challenges for this wallet (max {max_nonces}); \
                  wait for existing challenges to expire or complete them first"
             )));
         }
         db.insert_nonce(&wallet, nonce, expires)
             .await
             .map_err(|e| Error::Internal(e.to_string()))?;
+
+        // Opportunistic cleanup: every ~100th challenge request triggers nonce cleanup.
+        // This prevents unbounded table growth without requiring a separate cron job.
+        // Use timestamp modulo to distribute cleanup across instances.
+        if expires_unix % 100 == 0 {
+            tokio::spawn(async move {
+                if let Err(e) = db.cleanup_expired_nonces().await {
+                    tracing::warn!("nonce cleanup failed: {}", e);
+                }
+            });
+        }
 
         Ok(json!({ "message": message, "expires_unix": expires_unix }))
     }

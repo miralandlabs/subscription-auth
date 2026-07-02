@@ -15,9 +15,26 @@ fn init_tracing() {
 }
 
 async fn body_to_string(body: Body) -> Result<String, String> {
+    const MAX_BODY_SIZE: usize = 1_048_576; // 1MB
     match body {
-        Body::Text(s) => Ok(s),
+        Body::Text(s) => {
+            if s.len() > MAX_BODY_SIZE {
+                return Err(format!(
+                    "request body too large: {} bytes (max {})",
+                    s.len(),
+                    MAX_BODY_SIZE
+                ));
+            }
+            Ok(s)
+        }
         Body::Binary(b) => {
+            if b.len() > MAX_BODY_SIZE {
+                return Err(format!(
+                    "request body too large: {} bytes (max {})",
+                    b.len(),
+                    MAX_BODY_SIZE
+                ));
+            }
             String::from_utf8(b).map_err(|_| "request body is not valid UTF-8".to_string())
         }
         Body::Empty => Ok(String::new()),
@@ -118,8 +135,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 fn not_found() -> Response<Body> {
-    Response::builder()
+    let builder = Response::builder()
         .status(StatusCode::NOT_FOUND)
+        .header("Content-Type", "text/plain");
+    http_util::add_cors_headers(builder)
         .body(Body::Text("Not found".into()))
         .unwrap()
 }

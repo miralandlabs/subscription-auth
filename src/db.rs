@@ -201,6 +201,23 @@ impl AuthDb {
         Ok(rows > 0)
     }
 
+    /// Cleanup expired nonces to prevent unbounded table growth.
+    /// Should be called periodically (e.g., every 30 minutes).
+    /// Returns the number of nonces deleted.
+    pub async fn cleanup_expired_nonces(&self) -> Result<u64, Error> {
+        let client = self.conn().await?;
+        self.exec_in_tx(
+            client,
+            r#"
+            DELETE FROM subscription_auth_nonces
+            WHERE expires_at < NOW() - INTERVAL '1 hour'
+            "#,
+            &[],
+            "cleanup expired nonces",
+        )
+        .await
+    }
+
     pub async fn get_service(&self, service_id: &str) -> Result<Option<ServiceRow>, Error> {
         let client = self.conn().await?;
         let row = self
