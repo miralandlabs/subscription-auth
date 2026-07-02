@@ -1,16 +1,22 @@
 use vercel_runtime::{Body, Response, StatusCode as VercelStatusCode};
 
-pub fn json_response<T: serde::Serialize>(status: u16, value: &T) -> Response<Body> {
-    let vercel_status = VercelStatusCode::from_u16(status).unwrap_or(VercelStatusCode::OK);
-    Response::builder()
-        .status(vercel_status)
-        .header("Content-Type", "application/json")
+pub fn add_cors_headers(builder: http::response::Builder) -> http::response::Builder {
+    builder
         .header("Access-Control-Allow-Origin", "*")
         .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         .header(
             "Access-Control-Allow-Headers",
             "Content-Type, Authorization",
         )
+}
+
+pub fn json_response<T: serde::Serialize>(status: u16, value: &T) -> Response<Body> {
+    let vercel_status = VercelStatusCode::from_u16(status).unwrap_or(VercelStatusCode::OK);
+    let builder = Response::builder()
+        .status(vercel_status)
+        .header("Content-Type", "application/json");
+
+    add_cors_headers(builder)
         .body(Body::Text(
             serde_json::to_string(value).unwrap_or_else(|_| "{}".into()),
         ))
@@ -18,17 +24,11 @@ pub fn json_response<T: serde::Serialize>(status: u16, value: &T) -> Response<Bo
 }
 
 pub fn cors_options() -> Response<Body> {
-    Response::builder()
+    let builder = Response::builder()
         .status(VercelStatusCode::NO_CONTENT)
-        .header("Access-Control-Allow-Origin", "*")
-        .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        .header(
-            "Access-Control-Allow-Headers",
-            "Content-Type, Authorization",
-        )
-        .header("Access-Control-Max-Age", "86400")
-        .body(Body::Empty)
-        .unwrap()
+        .header("Access-Control-Max-Age", "86400");
+
+    add_cors_headers(builder).body(Body::Empty).unwrap()
 }
 
 pub fn parse_wallet_path(path: &str, suffix: &str) -> Option<String> {

@@ -54,16 +54,12 @@ impl Error {
             ),
         };
 
-        Response::builder()
+        let builder = Response::builder()
             .status(status)
             .header("Content-Type", "application/json")
-            .header("Access-Control-Allow-Origin", "*")
-            .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            .header(
-                "Access-Control-Allow-Headers",
-                "Content-Type, Authorization",
-            )
-            .header("X-Date", date)
+            .header("X-Date", date);
+
+        crate::http_util::add_cors_headers(builder)
             .body(Body::Text(
                 json!({ "error": code, "message": message }).to_string(),
             ))

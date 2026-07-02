@@ -652,27 +652,25 @@ impl AuthDb {
             Self::discard_client(client, label, "open transaction failed");
             return Err(e);
         }
-
-        let rows = match timeout(Self::QUERY_TIMEOUT, client.execute(sql, params)).await {
-            Ok(Ok(rows)) => rows,
+        let result = match timeout(Self::QUERY_TIMEOUT, client.execute(sql, params)).await {
+            Ok(Ok(val)) => val,
             Ok(Err(e)) => {
-                Self::discard_client(client, label, "execute failed");
-                return Err(Error::Internal(format!("{label} execute failed: {e}")));
+                Self::discard_client(client, label, "query failed");
+                return Err(Error::Internal(format!("{label} query failed: {e}")));
             }
             Err(_) => {
-                Self::discard_client(client, label, "execute timed out");
+                Self::discard_client(client, label, "query timed out");
                 return Err(Error::Internal(format!(
-                    "{label} timed out after {:?}",
+                    "{label} query timed out after {:?}",
                     Self::QUERY_TIMEOUT
                 )));
             }
         };
-
         if let Err(e) = Self::commit_transaction(&client, label).await {
             Self::discard_client(client, label, "commit failed");
             return Err(e);
         }
-        Ok(rows)
+        Ok(result)
     }
 
     async fn query_opt_in_tx(
@@ -686,9 +684,8 @@ impl AuthDb {
             Self::discard_client(client, label, "open transaction failed");
             return Err(e);
         }
-
-        let row = match timeout(Self::QUERY_TIMEOUT, client.query_opt(sql, params)).await {
-            Ok(Ok(row)) => row,
+        let result = match timeout(Self::QUERY_TIMEOUT, client.query_opt(sql, params)).await {
+            Ok(Ok(val)) => val,
             Ok(Err(e)) => {
                 Self::discard_client(client, label, "query failed");
                 return Err(Error::Internal(format!("{label} query failed: {e}")));
@@ -696,17 +693,16 @@ impl AuthDb {
             Err(_) => {
                 Self::discard_client(client, label, "query timed out");
                 return Err(Error::Internal(format!(
-                    "{label} timed out after {:?}",
+                    "{label} query timed out after {:?}",
                     Self::QUERY_TIMEOUT
                 )));
             }
         };
-
         if let Err(e) = Self::commit_transaction(&client, label).await {
             Self::discard_client(client, label, "commit failed");
             return Err(e);
         }
-        Ok(row)
+        Ok(result)
     }
 
     async fn query_in_tx(
@@ -720,9 +716,8 @@ impl AuthDb {
             Self::discard_client(client, label, "open transaction failed");
             return Err(e);
         }
-
-        let rows = match timeout(Self::QUERY_TIMEOUT, client.query(sql, params)).await {
-            Ok(Ok(rows)) => rows,
+        let result = match timeout(Self::QUERY_TIMEOUT, client.query(sql, params)).await {
+            Ok(Ok(val)) => val,
             Ok(Err(e)) => {
                 Self::discard_client(client, label, "query failed");
                 return Err(Error::Internal(format!("{label} query failed: {e}")));
@@ -730,16 +725,15 @@ impl AuthDb {
             Err(_) => {
                 Self::discard_client(client, label, "query timed out");
                 return Err(Error::Internal(format!(
-                    "{label} timed out after {:?}",
+                    "{label} query timed out after {:?}",
                     Self::QUERY_TIMEOUT
                 )));
             }
         };
-
         if let Err(e) = Self::commit_transaction(&client, label).await {
             Self::discard_client(client, label, "commit failed");
             return Err(e);
         }
-        Ok(rows)
+        Ok(result)
     }
 }
