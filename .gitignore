@@ -10,3 +10,7 @@ scripts/.env
 
 node_modules
 .vercel
+
+# Article drafts (WIP content)
+docs/articles/
+.DS_Store
