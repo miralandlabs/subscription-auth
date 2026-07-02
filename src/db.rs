@@ -56,8 +56,11 @@ impl AuthDb {
     const PG_STATEMENT_TIMEOUT: &'static str = "25s";
 
     pub fn connect(database_url: impl Into<String>) -> Result<Self, Error> {
+        let url_string = database_url.into();
+        tracing::info!("Initializing database connection pool");
+
         let mut cfg = Config::new();
-        cfg.url = Some(database_url.into());
+        cfg.url = Some(url_string.clone());
         cfg.manager = Some(ManagerConfig {
             recycling_method: RecyclingMethod::Clean,
         });
@@ -70,6 +73,13 @@ impl AuthDb {
             },
             ..Default::default()
         });
+
+        tracing::info!(
+            "Pool config: max_size=5, wait={:?}, create={:?}, recycle={:?}",
+            Self::WAIT,
+            Self::CREATE,
+            Self::RECYCLE
+        );
 
         let mut builder =
             SslConnector::builder(SslMethod::tls()).map_err(|e| Error::Internal(e.to_string()))?;
@@ -84,11 +94,14 @@ impl AuthDb {
             builder.set_verify(openssl::ssl::SslVerifyMode::NONE);
         } else {
             builder.set_verify(openssl::ssl::SslVerifyMode::PEER);
+            tracing::info!("TLS certificate verification enabled (production mode)");
         }
         let tls = MakeTlsConnector::new(builder.build());
         let pool = cfg
             .create_pool(Some(Runtime::Tokio1), tls)
             .map_err(|e| Error::Internal(format!("db pool: {e}")))?;
+
+        tracing::info!("Database connection pool created successfully");
         Ok(Self { pool })
     }
 
@@ -103,15 +116,46 @@ impl AuthDb {
     }
 
     async fn conn(&self) -> Result<Client, Error> {
-        timeout(Self::POOL_GET_TIMEOUT, self.pool.get())
-            .await
-            .map_err(|_| {
-                Error::Internal(format!(
+        let start = std::time::Instant::now();
+        tracing::info!(
+            "db pool get attempt - pool_status: available={} size={} max_size={}",
+            self.pool.status().available,
+            self.pool.status().size,
+            self.pool.status().max_size
+        );
+
+        let result = timeout(Self::POOL_GET_TIMEOUT, self.pool.get()).await;
+
+        match result {
+            Ok(Ok(client)) => {
+                tracing::info!("db pool get succeeded in {:?}", start.elapsed());
+                Ok(client)
+            }
+            Ok(Err(e)) => {
+                error!(
+                    "db pool get failed after {:?} - error: {} - pool_status: available={} size={} max_size={}",
+                    start.elapsed(),
+                    e,
+                    self.pool.status().available,
+                    self.pool.status().size,
+                    self.pool.status().max_size
+                );
+                Err(Error::Internal(format!("db pool error: {e}")))
+            }
+            Err(_) => {
+                error!(
+                    "db pool get TIMED OUT after {:?} - pool_status: available={} size={} max_size={}",
+                    start.elapsed(),
+                    self.pool.status().available,
+                    self.pool.status().size,
+                    self.pool.status().max_size
+                );
+                Err(Error::Internal(format!(
                     "db pool get timed out after {:?}",
                     Self::POOL_GET_TIMEOUT
-                ))
-            })?
-            .map_err(|e| Error::Internal(format!("db pool: {e}")))
+                )))
+            }
+        }
     }
 
     pub async fn ping(&self) -> Result<(), Error> {
