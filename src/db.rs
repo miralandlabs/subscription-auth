@@ -718,8 +718,20 @@ impl AuthDb {
 
     async fn open_transaction(client: &Client, label: &str) -> Result<(), Error> {
         Self::begin_transaction(client, label).await?;
-        Self::set_statement_timeout_local(client).await?;
-        Self::deallocate_prepared(client).await?;
+
+        // If SET LOCAL or DEALLOCATE fail after BEGIN succeeded, we must rollback
+        // to prevent leaving the connection in a transaction state that would leak
+        // when the client is discarded and recycled (especially with RecyclingMethod::Fast).
+        if let Err(e) = Self::set_statement_timeout_local(client).await {
+            Self::rollback_transaction(client, label).await;
+            return Err(e);
+        }
+
+        if let Err(e) = Self::deallocate_prepared(client).await {
+            Self::rollback_transaction(client, label).await;
+            return Err(e);
+        }
+
         Ok(())
     }
 
