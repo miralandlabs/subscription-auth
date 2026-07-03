@@ -44,6 +44,13 @@ pub struct AuthDb {
     pool: Pool,
 }
 
+/// Result of atomically rate-checking and inserting a challenge nonce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChallengeNonceOutcome {
+    Inserted,
+    RateLimited,
+}
+
 impl AuthDb {
     const WAIT: Duration = Duration::from_secs(15);
     const CREATE: Duration = Duration::from_secs(10);
@@ -193,6 +200,86 @@ impl AuthDb {
         )
         .await?;
         Ok(())
+    }
+
+    /// Count active nonces and insert a challenge nonce in **one** transaction.
+    /// Used by `/challenge` to halve pool checkouts (one BEGIN/COMMIT instead of two).
+    pub async fn insert_challenge_nonce(
+        &self,
+        wallet: &str,
+        nonce: &str,
+        expires_at: DateTime<Utc>,
+        max_nonces: i64,
+    ) -> Result<ChallengeNonceOutcome, Error> {
+        const COUNT_SQL: &str = r#"
+            SELECT COUNT(*) AS n FROM subscription_auth_nonces
+            WHERE wallet = $1 AND expires_at > NOW()
+            "#;
+        const INSERT_SQL: &str = r#"
+            INSERT INTO subscription_auth_nonces (wallet, nonce, expires_at)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (wallet, nonce) DO NOTHING
+            "#;
+
+        let client = self.conn().await?;
+        let label = "insert challenge nonce";
+        if let Err(e) = Self::open_transaction(&client, label).await {
+            Self::discard_client(client, label, "open transaction failed");
+            return Err(e);
+        }
+
+        let active =
+            match timeout(Self::QUERY_TIMEOUT, client.query_opt(COUNT_SQL, &[&wallet])).await {
+                Ok(Ok(row)) => row.map(|r| r.get::<_, i64>("n")).unwrap_or(0),
+                Ok(Err(e)) => {
+                    Self::rollback_transaction(&client, label).await;
+                    Self::discard_client(client, label, "count query failed");
+                    return Err(Error::Internal(format!("{label} count failed: {e}")));
+                }
+                Err(_) => {
+                    Self::rollback_transaction(&client, label).await;
+                    Self::discard_client(client, label, "count query timed out");
+                    return Err(Error::Internal(format!(
+                        "{label} count timed out after {:?}",
+                        Self::QUERY_TIMEOUT
+                    )));
+                }
+            };
+
+        if active >= max_nonces {
+            Self::rollback_transaction(&client, label).await;
+            drop(client);
+            return Ok(ChallengeNonceOutcome::RateLimited);
+        }
+
+        match timeout(
+            Self::QUERY_TIMEOUT,
+            client.execute(INSERT_SQL, &[&wallet, &nonce, &expires_at]),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                Self::rollback_transaction(&client, label).await;
+                Self::discard_client(client, label, "insert query failed");
+                return Err(Error::Internal(format!("{label} insert failed: {e}")));
+            }
+            Err(_) => {
+                Self::rollback_transaction(&client, label).await;
+                Self::discard_client(client, label, "insert query timed out");
+                return Err(Error::Internal(format!(
+                    "{label} insert timed out after {:?}",
+                    Self::QUERY_TIMEOUT
+                )));
+            }
+        }
+
+        if let Err(e) = Self::commit_transaction(&client, label).await {
+            Self::discard_client(client, label, "commit failed");
+            return Err(e);
+        }
+        drop(client);
+        Ok(ChallengeNonceOutcome::Inserted)
     }
 
     pub async fn nonce_exists(&self, wallet: &str, nonce: &str) -> Result<bool, Error> {
@@ -700,6 +787,14 @@ impl AuthDb {
                 ))
             })?
             .map_err(|e| Error::Internal(format!("{label} commit failed: {e}")))
+    }
+
+    async fn rollback_transaction(client: &Client, label: &str) {
+        match timeout(Self::QUERY_TIMEOUT, client.batch_execute("ROLLBACK")).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => warn!(label, error = %e, "rollback failed"),
+            Err(_) => warn!(label, "rollback timed out"),
+        }
     }
 
     async fn exec_in_tx(

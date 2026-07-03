@@ -11,7 +11,7 @@ use {
 
 use crate::{
     challenge_auth::{self, minify_json_array, Action, ChallengeBuildParams, ParsedChallenge},
-    db::ServiceRow,
+    db::{ChallengeNonceOutcome, ServiceRow},
     error::{into_vercel_response, Error},
     http_util::{cors_options, json_response, parse_wallet_path},
     jwt::{self, decode_bearer_token, decode_unverified_claims},
@@ -251,19 +251,19 @@ pub async fn handle_challenge(state: Arc<AppState>, wallet: String, query: &str)
             .max(1); // Ensure at least 1
 
         let db = state.require_db()?;
-        let active = db
-            .count_active_nonces(&wallet)
+        match db
+            .insert_challenge_nonce(&wallet, nonce, expires, max_nonces)
             .await
-            .map_err(|e| Error::Internal(e.to_string()))?;
-        if active >= max_nonces {
-            return Err(Error::BadRequest(format!(
-                "too many pending challenges for this wallet (max {max_nonces}); \
-                 wait for existing challenges to expire or complete them first"
-            )));
+            .map_err(|e| Error::Internal(e.to_string()))?
+        {
+            ChallengeNonceOutcome::Inserted => {}
+            ChallengeNonceOutcome::RateLimited => {
+                return Err(Error::BadRequest(format!(
+                    "too many pending challenges for this wallet (max {max_nonces}); \
+                     wait for existing challenges to expire or complete them first"
+                )));
+            }
         }
-        db.insert_nonce(&wallet, nonce, expires)
-            .await
-            .map_err(|e| Error::Internal(e.to_string()))?;
 
         // Opportunistic cleanup: every ~100th challenge request triggers nonce cleanup.
         // This prevents unbounded table growth without requiring a separate cron job.
