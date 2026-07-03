@@ -211,14 +211,17 @@ impl AuthDb {
         expires_at: DateTime<Utc>,
         max_nonces: i64,
     ) -> Result<ChallengeNonceOutcome, Error> {
-        const COUNT_SQL: &str = r#"
-            SELECT COUNT(*) AS n FROM subscription_auth_nonces
-            WHERE wallet = $1 AND expires_at > NOW()
-            "#;
-        const INSERT_SQL: &str = r#"
+        // Use a single CTE query to prevent TOCTOU race: count and conditionally insert atomically
+        const ATOMIC_INSERT_SQL: &str = r#"
+            WITH counted AS (
+                SELECT COUNT(*) AS n FROM subscription_auth_nonces
+                WHERE wallet = $1 AND expires_at > NOW()
+            )
             INSERT INTO subscription_auth_nonces (wallet, nonce, expires_at)
-            VALUES ($1, $2, $3)
+            SELECT $1, $2, $3
+            WHERE (SELECT n FROM counted) < $4
             ON CONFLICT (wallet, nonce) DO NOTHING
+            RETURNING 1
             "#;
 
         let client = self.conn().await?;
@@ -228,58 +231,47 @@ impl AuthDb {
             return Err(e);
         }
 
-        let active =
-            match timeout(Self::QUERY_TIMEOUT, client.query_opt(COUNT_SQL, &[&wallet])).await {
-                Ok(Ok(row)) => row.map(|r| r.get::<_, i64>("n")).unwrap_or(0),
-                Ok(Err(e)) => {
-                    Self::rollback_transaction(&client, label).await;
-                    Self::discard_client(client, label, "count query failed");
-                    return Err(Error::Internal(format!("{label} count failed: {e}")));
-                }
-                Err(_) => {
-                    Self::rollback_transaction(&client, label).await;
-                    Self::discard_client(client, label, "count query timed out");
-                    return Err(Error::Internal(format!(
-                        "{label} count timed out after {:?}",
-                        Self::QUERY_TIMEOUT
-                    )));
-                }
-            };
-
-        if active >= max_nonces {
-            Self::rollback_transaction(&client, label).await;
-            drop(client);
-            return Ok(ChallengeNonceOutcome::RateLimited);
-        }
-
-        match timeout(
+        // Execute atomic CTE: count and conditionally insert in one query to prevent race conditions
+        let result = match timeout(
             Self::QUERY_TIMEOUT,
-            client.execute(INSERT_SQL, &[&wallet, &nonce, &expires_at]),
+            client.query_opt(
+                ATOMIC_INSERT_SQL,
+                &[&wallet, &nonce, &expires_at, &max_nonces],
+            ),
         )
         .await
         {
-            Ok(Ok(_)) => {}
+            Ok(Ok(row)) => row,
             Ok(Err(e)) => {
                 Self::rollback_transaction(&client, label).await;
-                Self::discard_client(client, label, "insert query failed");
-                return Err(Error::Internal(format!("{label} insert failed: {e}")));
+                Self::discard_client(client, label, "atomic insert query failed");
+                return Err(Error::Internal(format!(
+                    "{label} atomic insert failed: {e}"
+                )));
             }
             Err(_) => {
                 Self::rollback_transaction(&client, label).await;
-                Self::discard_client(client, label, "insert query timed out");
+                Self::discard_client(client, label, "atomic insert query timed out");
                 return Err(Error::Internal(format!(
-                    "{label} insert timed out after {:?}",
+                    "{label} atomic insert timed out after {:?}",
                     Self::QUERY_TIMEOUT
                 )));
             }
-        }
+        };
+
+        // If row is None, the WHERE clause rejected the insert (rate limited)
+        let outcome = if result.is_none() {
+            ChallengeNonceOutcome::RateLimited
+        } else {
+            ChallengeNonceOutcome::Inserted
+        };
 
         if let Err(e) = Self::commit_transaction(&client, label).await {
             Self::discard_client(client, label, "commit failed");
             return Err(e);
         }
         drop(client);
-        Ok(ChallengeNonceOutcome::Inserted)
+        Ok(outcome)
     }
 
     pub async fn nonce_exists(&self, wallet: &str, nonce: &str) -> Result<bool, Error> {
@@ -811,10 +803,12 @@ impl AuthDb {
         let result = match timeout(Self::QUERY_TIMEOUT, client.execute(sql, params)).await {
             Ok(Ok(val)) => val,
             Ok(Err(e)) => {
+                Self::rollback_transaction(&client, label).await;
                 Self::discard_client(client, label, "query failed");
                 return Err(Error::Internal(format!("{label} query failed: {e}")));
             }
             Err(_) => {
+                Self::rollback_transaction(&client, label).await;
                 Self::discard_client(client, label, "query timed out");
                 return Err(Error::Internal(format!(
                     "{label} query timed out after {:?}",
@@ -845,10 +839,12 @@ impl AuthDb {
         let result = match timeout(Self::QUERY_TIMEOUT, client.query_opt(sql, params)).await {
             Ok(Ok(val)) => val,
             Ok(Err(e)) => {
+                Self::rollback_transaction(&client, label).await;
                 Self::discard_client(client, label, "query failed");
                 return Err(Error::Internal(format!("{label} query failed: {e}")));
             }
             Err(_) => {
+                Self::rollback_transaction(&client, label).await;
                 Self::discard_client(client, label, "query timed out");
                 return Err(Error::Internal(format!(
                     "{label} query timed out after {:?}",
@@ -879,10 +875,12 @@ impl AuthDb {
         let result = match timeout(Self::QUERY_TIMEOUT, client.query(sql, params)).await {
             Ok(Ok(val)) => val,
             Ok(Err(e)) => {
+                Self::rollback_transaction(&client, label).await;
                 Self::discard_client(client, label, "query failed");
                 return Err(Error::Internal(format!("{label} query failed: {e}")));
             }
             Err(_) => {
+                Self::rollback_transaction(&client, label).await;
                 Self::discard_client(client, label, "query timed out");
                 return Err(Error::Internal(format!(
                     "{label} query timed out after {:?}",
