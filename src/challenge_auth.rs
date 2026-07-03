@@ -22,6 +22,9 @@ pub enum Action {
     Issue,
     Revoke,
     Update,
+    /// Retire is distinct from Update so that an Update challenge cannot be
+    /// replayed to retire the service.
+    Retire,
 }
 
 impl Action {
@@ -31,6 +34,7 @@ impl Action {
             Action::Issue => "issue",
             Action::Revoke => "revoke",
             Action::Update => "update",
+            Action::Retire => "retire",
         }
     }
 
@@ -40,6 +44,7 @@ impl Action {
             "issue" => Ok(Action::Issue),
             "revoke" => Ok(Action::Revoke),
             "update" => Ok(Action::Update),
+            "retire" => Ok(Action::Retire),
             _ => Err(format!("unknown action: {s}")),
         }
     }
@@ -181,6 +186,13 @@ fn build_preimage(
             }
             if let Some(ref json) = params.resources_allowlist_json {
                 lines.push(format!("resources_allowlist_json: {json}"));
+            }
+        }
+        // Retire only binds service_id — no resources_allowlist to prevent
+        // a retire challenge from being forged via an update challenge.
+        Action::Retire => {
+            if let Some(ref sid) = params.service_id {
+                lines.push(format!("service_id: {sid}"));
             }
         }
     }

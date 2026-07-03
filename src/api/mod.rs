@@ -11,7 +11,7 @@ use {
 
 use crate::{
     challenge_auth::{self, minify_json_array, Action, ChallengeBuildParams, ParsedChallenge},
-    db::ServiceRow,
+    db::{ChallengeNonceOutcome, ServiceRow},
     error::{into_vercel_response, Error},
     http_util::{cors_options, json_response, parse_wallet_path},
     jwt::{self, decode_bearer_token, decode_unverified_claims},
@@ -38,7 +38,6 @@ pub struct RegisterBody {
     pub service_url: String,
     pub resources_allowlist: Vec<String>,
     pub tier_bundles: Option<Value>,
-    pub recovery_wallet: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -60,6 +59,19 @@ pub struct IssueBody {
 pub struct RevokeBody {
     #[serde(flatten)]
     pub signed: SignedBody,
+}
+
+/// Body for POST /v1/services/{wallet}/subscriptions.
+/// Auth data is in the body (not query params) to avoid leaking
+/// signatures into server logs and browser history.
+#[derive(Deserialize)]
+pub struct ListSubscriptionsBody {
+    #[serde(flatten)]
+    pub signed: SignedBody,
+    pub service_id: Option<String>,
+    /// Keyset cursor for pagination: pass the `next_cursor` value from the previous
+    /// response to get the next page. Omit (or pass null) for the first page.
+    pub before: Option<String>,
 }
 
 async fn verify_and_consume(
@@ -163,7 +175,10 @@ pub async fn handle_challenge(state: Arc<AppState>, wallet: String, query: &str)
                     .get("resources")
                     .or_else(|| map.get("resources_json"))
                     .cloned()
-                    .unwrap_or_else(|| "[\"*\"]".into());
+                    // Default to empty array; callers must explicitly pass resources=["*"]
+                    // if they want wildcard access. This prevents accidentally issuing
+                    // over-permissive tokens when the param is omitted.
+                    .unwrap_or_else(|| "[]".into());
                 ChallengeBuildParams {
                     action: Action::Issue,
                     service_id: map.get("service_id").cloned(),
@@ -198,6 +213,16 @@ pub async fn handle_challenge(state: Arc<AppState>, wallet: String, query: &str)
                 resources_json: None,
                 jti: None,
             },
+            Action::Retire => ChallengeBuildParams {
+                action: Action::Retire,
+                service_id: map.get("service_id").cloned(),
+                service_url: None,
+                resources_allowlist_json: None,
+                payer: None,
+                tier: None,
+                resources_json: None,
+                jti: None,
+            },
         };
 
         let (message, expires_unix) = challenge_auth::build_challenge_message(
@@ -215,11 +240,41 @@ pub async fn handle_challenge(state: Arc<AppState>, wallet: String, query: &str)
 
         let expires = DateTime::from_timestamp(expires_unix as i64, 0)
             .ok_or_else(|| Error::Internal("invalid expiry".into()))?;
-        state
-            .require_db()?
-            .insert_nonce(&wallet, nonce, expires)
+
+        // Rate-limit: cap outstanding (unexpired) nonces per wallet to prevent
+        // flooding the nonce table via rapid /challenge calls.
+        // Configurable via SUBSCRIPTION_AUTH_MAX_NONCES_PER_WALLET (default: 10)
+        let max_nonces = std::env::var("SUBSCRIPTION_AUTH_MAX_NONCES_PER_WALLET")
+            .ok()
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(10)
+            .max(1); // Ensure at least 1
+
+        let db = state.require_db()?;
+        match db
+            .insert_challenge_nonce(&wallet, nonce, expires, max_nonces)
             .await
-            .map_err(|e| Error::Internal(e.to_string()))?;
+            .map_err(|e| Error::Internal(e.to_string()))?
+        {
+            ChallengeNonceOutcome::Inserted => {}
+            ChallengeNonceOutcome::RateLimited => {
+                return Err(Error::BadRequest(format!(
+                    "too many pending challenges for this wallet (max {max_nonces}); \
+                     wait for existing challenges to expire or complete them first"
+                )));
+            }
+        }
+
+        // Opportunistic cleanup: every ~100th challenge request triggers nonce cleanup.
+        // This prevents unbounded table growth without requiring a separate cron job.
+        // Use timestamp modulo to distribute cleanup across instances.
+        if expires_unix % 100 == 0 {
+            tokio::spawn(async move {
+                if let Err(e) = db.cleanup_expired_nonces().await {
+                    tracing::warn!("nonce cleanup failed: {}", e);
+                }
+            });
+        }
 
         Ok(json!({ "message": message, "expires_unix": expires_unix }))
     }
@@ -268,7 +323,10 @@ pub async fn handle_register(
             .map_err(|e| Error::Internal(e.to_string()))?
             .is_some()
         {
-            return Err(Error::Forbidden("service_id already registered".into()));
+            // Use 409 Conflict: the intent is idempotent ("I want my service registered");
+            // 403 Forbidden was misleading and caused raw API callers to think it was an
+            // auth failure rather than a simple "already exists" condition.
+            return Err(Error::Conflict("service_id already registered".into()));
         }
 
         let allowlist_value: Value = serde_json::from_str(&allowlist_json)
@@ -304,6 +362,8 @@ pub async fn handle_update(
     let result = async {
         let body: UpdateBody = serde_json::from_str(&body_text)
             .map_err(|e| Error::BadRequest(format!("invalid json: {e}")))?;
+        // Re-validate service_id format on every mutating call.
+        validate_service_id(&body.service_id)?;
         let parsed = verify_and_consume(
             &state,
             &wallet,
@@ -318,6 +378,14 @@ pub async fn handle_update(
             minify_json_array(&body.resources_allowlist).map_err(Error::BadRequest)?;
         if parsed.service_id.as_deref() != Some(body.service_id.as_str()) {
             return Err(Error::Unauthorized("service_id mismatch".into()));
+        }
+        // Verify the submitted allowlist matches what was bound in the signed challenge.
+        // This mirrors the same check in handle_register and prevents a caller from signing
+        // a challenge for allowlist A but submitting allowlist B in the POST body.
+        if parsed.resources_allowlist_json.as_deref() != Some(allowlist_json.as_str()) {
+            return Err(Error::Unauthorized(
+                "resources_allowlist not bound in challenge".into(),
+            ));
         }
 
         let service = load_active_service(&state, &body.service_id).await?;
@@ -362,7 +430,7 @@ pub async fn handle_retire(
             &wallet,
             &body.message,
             &body.signature,
-            Action::Update,
+            Action::Retire,
         )
         .await?;
         wallet_matches_path(&wallet, &parsed.wallet)?;
@@ -523,15 +591,16 @@ pub async fn handle_introspect(state: Arc<AppState>, auth_header: Option<&str>) 
         let now = Utc::now().timestamp();
         let expired = now >= claims.exp;
 
+        // DB is required for revocation status. Fail safe: if the DB is absent
+        // return 503 rather than reporting active=true on a potentially-revoked token.
+        let db = state.require_db()?;
         let mut revoked = false;
-        if let Ok(db) = state.require_db() {
-            if let Some(row) = db
-                .get_token(jti)
-                .await
-                .map_err(|e| Error::Internal(e.to_string()))?
-            {
-                revoked = row.revoked_at.is_some();
-            }
+        if let Some(row) = db
+            .get_token(jti)
+            .await
+            .map_err(|e| Error::Internal(e.to_string()))?
+        {
+            revoked = row.revoked_at.is_some();
         }
 
         let active = !expired && !revoked;
@@ -586,35 +655,66 @@ pub async fn handle_revocations(state: Arc<AppState>, query: &str) -> Response<B
     into_vercel_response(result)
 }
 
+/// POST /v1/services/{wallet}/subscriptions
+/// Auth is in the JSON body (message + signature) — NOT in query params — to avoid
+/// leaking cryptographic material into server logs and browser history (BUG-04/UX-05).
+/// The nonce is consumed on each call, preventing replay.
+///
+/// Supports keyset pagination via the optional `before` field (ISO-8601 issued_at cursor).
+/// Response includes `has_more` and `next_cursor` so callers can page through all results.
 pub async fn handle_list_subscriptions(
     state: Arc<AppState>,
     wallet: String,
-    query: &str,
+    body_text: String,
 ) -> Response<Body> {
     let result = async {
-        let map = crate::http_util::parse_query_map(query);
-        let service_id = map.get("service_id").map(|s| s.as_str());
-        let message = map.get("message");
-        let signature = map.get("signature");
-        if message.is_none() || signature.is_none() {
-            return Err(Error::Unauthorized(
-                "wallet-signed message and signature required".into(),
-            ));
-        }
-        let parsed = challenge_auth::verify_challenge_submission(
-            &state.config.hmac_secret,
+        let body: ListSubscriptionsBody = serde_json::from_str(&body_text)
+            .map_err(|e| Error::BadRequest(format!("invalid json: {e}")))?;
+
+        // verify_and_consume validates HMAC, ed25519 sig, expiry, AND consumes the nonce
+        // to prevent replay attacks — unlike the old GET query-param approach which never
+        // consumed the nonce (BUG-04).
+        let parsed = verify_and_consume(
+            &state,
             &wallet,
-            message.unwrap(),
-            signature.unwrap(),
+            &body.signed.message,
+            &body.signed.signature,
+            Action::Issue,
         )
-        .map_err(Error::Unauthorized)?;
+        .await
+        .map_err(|_| {
+            Error::Unauthorized(
+                "wallet-signed challenge required; obtain a challenge for action=issue first"
+                    .into(),
+            )
+        })?;
         wallet_matches_path(&wallet, &parsed.wallet)?;
 
-        let rows = state
+        // Parse optional before-cursor for keyset pagination.
+        let before: Option<DateTime<Utc>> = body
+            .before
+            .as_deref()
+            .map(|s| {
+                DateTime::parse_from_rfc3339(s)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .map_err(|e| Error::BadRequest(format!("invalid before cursor: {e}")))
+            })
+            .transpose()?;
+
+        const PAGE_SIZE: i64 = 50;
+        let service_id = body.service_id.as_deref();
+        let (rows, has_more) = state
             .require_db()?
-            .list_subscriptions(&wallet, service_id, 100)
+            .list_subscriptions(&wallet, service_id, PAGE_SIZE, before)
             .await
             .map_err(|e| Error::Internal(e.to_string()))?;
+
+        // next_cursor is the issued_at of the last row — pass it as `before` on the next call.
+        let next_cursor = if has_more {
+            rows.last().map(|r| r.issued_at.to_rfc3339())
+        } else {
+            None
+        };
 
         let items: Vec<Value> = rows
             .into_iter()
@@ -632,7 +732,36 @@ pub async fn handle_list_subscriptions(
             })
             .collect();
 
-        Ok(json!({ "subscriptions": items }))
+        Ok(json!({
+            "subscriptions": items,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+        }))
+    }
+    .await;
+
+    into_vercel_response(result)
+}
+
+/// GET /v1/info/{service_id}
+/// Unauthenticated endpoint so sellers can verify their own registration status
+/// without attempting a re-register (UX-06).
+pub async fn handle_service_info(state: Arc<AppState>, service_id: String) -> Response<Body> {
+    let result = async {
+        let db = state.require_db()?;
+        let row = db
+            .get_service(&service_id)
+            .await
+            .map_err(|e| Error::Internal(e.to_string()))?
+            .ok_or_else(|| Error::NotFound("service not registered".into()))?;
+
+        Ok(json!({
+            "service_id": row.service_id,
+            "status": row.status,
+            "service_url": row.service_url,
+            "merchant_wallet": row.merchant_wallet,
+            "resources_allowlist": row.resources_allowlist,
+        }))
     }
     .await;
 

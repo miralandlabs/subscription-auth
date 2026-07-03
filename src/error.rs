@@ -11,6 +11,8 @@ pub enum Error {
     Unauthorized(String),
     Forbidden(String),
     NotFound(String),
+    /// 409 Conflict — used for idempotent operations where the resource already exists.
+    Conflict(String),
     ServiceUnavailable(String),
     Internal(String),
 }
@@ -22,6 +24,7 @@ impl std::fmt::Display for Error {
             Error::Unauthorized(msg) => write!(f, "Unauthorized: {msg}"),
             Error::Forbidden(msg) => write!(f, "Forbidden: {msg}"),
             Error::NotFound(msg) => write!(f, "Not Found: {msg}"),
+            Error::Conflict(msg) => write!(f, "Conflict: {msg}"),
             Error::ServiceUnavailable(msg) => write!(f, "Service Unavailable: {msg}"),
             Error::Internal(msg) => write!(f, "Internal Error: {msg}"),
         }
@@ -38,6 +41,7 @@ impl Error {
             Error::Unauthorized(msg) => (VercelStatusCode::UNAUTHORIZED, "UNAUTHORIZED", msg),
             Error::Forbidden(msg) => (VercelStatusCode::FORBIDDEN, "FORBIDDEN", msg),
             Error::NotFound(msg) => (VercelStatusCode::NOT_FOUND, "NOT_FOUND", msg),
+            Error::Conflict(msg) => (VercelStatusCode::CONFLICT, "CONFLICT", msg),
             Error::ServiceUnavailable(msg) => (
                 VercelStatusCode::SERVICE_UNAVAILABLE,
                 "SERVICE_UNAVAILABLE",
@@ -50,16 +54,12 @@ impl Error {
             ),
         };
 
-        Response::builder()
+        let builder = Response::builder()
             .status(status)
             .header("Content-Type", "application/json")
-            .header("Access-Control-Allow-Origin", "*")
-            .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            .header(
-                "Access-Control-Allow-Headers",
-                "Content-Type, Authorization",
-            )
-            .header("X-Date", date)
+            .header("X-Date", date);
+
+        crate::http_util::add_cors_headers(builder)
             .body(Body::Text(
                 json!({ "error": code, "message": message }).to_string(),
             ))

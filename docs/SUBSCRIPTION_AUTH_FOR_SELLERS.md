@@ -2,7 +2,7 @@
 
 **Pay gate stays on your seller.** x402/pr402 settles on `POST /api/v1/subscribe` only. JWT auth on data routes is a separate choice.
 
-**Related:** [SUBSCRIPTION_PATTERN.md](https://github.com/miralandlabs/x402/blob/master/SUBSCRIPTION_PATTERN.md) (x402 hub) covers the **wire contract** — endpoints, 402 body, JWT claims, rate limits, buyer behavior. **This doc** covers **how to pick and configure** Tier A vs Tier B auth.
+**Related:** [SUBSCRIPTION_PATTERN.md](https://github.com/miraland-labs/x402/blob/master/SUBSCRIPTION_PATTERN.md) (x402 hub) covers the **wire contract** — endpoints, 402 body, JWT claims, rate limits, buyer behavior. **This doc** covers **how to pick and configure** Tier A vs Tier B auth.
 
 ---
 
@@ -17,13 +17,13 @@
 | **Register auth service** | No | **Yes — once at deploy** |
 | **Starter default** | Yes | `SUBSCRIPTION_MODE=tier-b` |
 
-Both use the same subscribe/data-route contract in [SUBSCRIPTION_PATTERN.md](https://github.com/miralandlabs/x402/blob/master/SUBSCRIPTION_PATTERN.md).
+Both use the same subscribe/data-route contract in [SUBSCRIPTION_PATTERN.md](https://github.com/miraland-labs/x402/blob/master/SUBSCRIPTION_PATTERN.md).
 
 ---
 
 ## Tier A — local JWT (default)
 
-**Best for:** fork [x402-subscription-starter](https://github.com/miralandlabs/x402-subscription-starter) and ship.
+**Best for:** fork [x402-subscription-starter](https://github.com/miraland-labs/x402-subscription-starter) and ship.
 
 ```bash
 cp .env.example .env
@@ -98,7 +98,7 @@ After x402 settle on `/subscribe`, the seller calls auth **`POST /v1/tokens/issu
 node scripts/e2e-tier-b-auth.mjs --keypair /path/to/seller-keypair.json
 ```
 
-**Full stack** (pr402 + local seller + buyer): [starter Tier B example](https://github.com/miralandlabs/x402-subscription-starter/tree/main/examples/tier-b-preview-e2e) — run seller and buyer in two terminals.
+**Full stack** (pr402 + local seller + buyer): [starter Tier B example](https://github.com/miraland-labs/x402-subscription-starter/tree/main/examples/tier-b-preview-e2e) — run seller and buyer in two terminals.
 
 ---
 
@@ -117,7 +117,7 @@ Buyers pay once per window and save the JWT locally until `exp`.
 
 ## Buyer payment proof (pr402 1.2)
 
-Custom buyers (not [x402-subscription-client](https://github.com/miralandlabs/x402-subscription-client)):
+Custom buyers (not [x402-subscription-client](https://github.com/miraland-labs/x402-subscription-client)):
 
 1. `POST …/build-exact-payment-tx` → sign `VersionedTransaction`
 2. `GET …/facilitator/capabilities` → `supported.kinds[scheme=exact].extra`
@@ -144,8 +144,8 @@ Scripts retry fetch/curl 5× with 2s backoff.
 
 | Doc | Use |
 |-----|-----|
-| [SUBSCRIPTION_PATTERN.md](https://github.com/miralandlabs/x402/blob/master/SUBSCRIPTION_PATTERN.md) | Wire contract, errors, checklists |
+| [SUBSCRIPTION_PATTERN.md](https://github.com/miraland-labs/x402/blob/master/SUBSCRIPTION_PATTERN.md) | Wire contract, errors, checklists |
 | [YIELD_QUALIFIED_SUBSCRIPTION.md](YIELD_QUALIFIED_SUBSCRIPTION.md) | Hold-qualified tiers — seller entitlement, not pr402 |
 | [README.md](../README.md) | Auth API + deploy |
-| [x402-subscription-starter](https://github.com/miralandlabs/x402-subscription-starter) | Forkable seller |
-| [x402-subscription-client](https://github.com/miralandlabs/x402-subscription-client) | Buyer SDK |
+| [x402-subscription-starter](https://github.com/miraland-labs/x402-subscription-starter) | Forkable seller |
+| [x402-subscription-client](https://github.com/miraland-labs/x402-subscription-client) | Buyer SDK |

@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS subscription_auth_services (
 CREATE INDEX IF NOT EXISTS idx_subscription_auth_services_wallet
     ON subscription_auth_services (merchant_wallet);
 
+CREATE INDEX IF NOT EXISTS idx_subscription_auth_services_wallet_status
+    ON subscription_auth_services (merchant_wallet, status)
+    WHERE status = 'active';
+
 CREATE TABLE IF NOT EXISTS subscription_auth_tokens (
     jti                   UUID PRIMARY KEY,
     service_id            TEXT NOT NULL REFERENCES subscription_auth_services (service_id),
@@ -33,6 +37,9 @@ CREATE INDEX IF NOT EXISTS idx_subscription_auth_tokens_service_issued
 CREATE INDEX IF NOT EXISTS idx_subscription_auth_tokens_revoked
     ON subscription_auth_tokens (service_id, revoked_at)
     WHERE revoked_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_subscription_auth_tokens_payer_issued
+    ON subscription_auth_tokens (payer, issued_at DESC);
 
 CREATE TABLE IF NOT EXISTS subscription_auth_nonces (
     wallet                TEXT NOT NULL,

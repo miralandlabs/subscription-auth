@@ -76,6 +76,32 @@ const serviceId = arg('service-id', process.env.SUBSCRIPTION_AUTH_SERVICE_ID) ||
 const serviceUrl = arg('service-url', process.env.SUBSCRIPTION_AUTH_SERVICE_URL) || 'http://127.0.0.1:3000';
 const dryRun = arg('dry-run') === true;
 
+/**
+ * Parse --allowlist flag.
+ * Accepts:
+ *   --allowlist "*"                         → ["*"]
+ *   --allowlist "/api/v1/data,/api/v1/echo" → ["/api/v1/data", "/api/v1/echo"]
+ *   --allowlist '["*"]'                     → ["*"]  (JSON array string)
+ * Defaults to ["*"] if not provided, but prints a warning encouraging explicit scoping.
+ */
+function parseAllowlist(raw) {
+  if (!raw || raw === true) {
+    console.warn(
+      'Warning: --allowlist not specified; defaulting to ["*"] (all resources).\n' +
+      '  Tip: pass --allowlist "/api/v1/data,/api/v1/echo" to restrict token scope.',
+    );
+    return ['*'];
+  }
+  // Try JSON array first
+  if (raw.startsWith('[')) {
+    try { return JSON.parse(raw); } catch {}
+  }
+  // Comma-separated paths
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+const allowlist = parseAllowlist(arg('allowlist'));
+
 if (!keypairPath || keypairPath === true) {
   console.error('Required: --keypair <path> or MERCHANT_KEYPAIR in scripts/.env.local');
   process.exit(2);
@@ -117,7 +143,6 @@ async function main() {
     wallet = walletFromKeypair(keypairPath);
   }
 
-  const allowlist = ['*'];
   const allowlistJson = JSON.stringify(allowlist);
 
   const challengeUrl = new URL(`/v1/services/${wallet}/challenge`, baseUrl);
@@ -130,6 +155,7 @@ async function main() {
   console.log(`wallet:      ${wallet}`);
   console.log(`service_id:  ${serviceId}`);
   console.log(`service_url: ${serviceUrl}`);
+  console.log(`allowlist:   ${JSON.stringify(allowlist)}`);
 
   if (dryRun) {
     console.log('dry-run: would GET', challengeUrl.toString());

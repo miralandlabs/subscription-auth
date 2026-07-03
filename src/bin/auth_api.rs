@@ -14,11 +14,30 @@ fn init_tracing() {
         .try_init();
 }
 
-async fn body_to_string(body: Body) -> String {
+async fn body_to_string(body: Body) -> Result<String, String> {
+    const MAX_BODY_SIZE: usize = 1_048_576; // 1MB
     match body {
-        Body::Text(s) => s,
-        Body::Binary(b) => String::from_utf8(b).unwrap_or_default(),
-        Body::Empty => String::new(),
+        Body::Text(s) => {
+            if s.len() > MAX_BODY_SIZE {
+                return Err(format!(
+                    "request body too large: {} bytes (max {})",
+                    s.len(),
+                    MAX_BODY_SIZE
+                ));
+            }
+            Ok(s)
+        }
+        Body::Binary(b) => {
+            if b.len() > MAX_BODY_SIZE {
+                return Err(format!(
+                    "request body too large: {} bytes (max {})",
+                    b.len(),
+                    MAX_BODY_SIZE
+                ));
+            }
+            String::from_utf8(b).map_err(|_| "request body is not valid UTF-8".to_string())
+        }
+        Body::Empty => Ok(String::new()),
     }
 }
 
@@ -38,7 +57,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .get("authorization")
                 .and_then(|v| v.to_str().ok())
                 .map(String::from);
-            let body = body_to_string(req.into_body()).await;
+            let body = match body_to_string(req.into_body()).await {
+                Ok(s) => s,
+                Err(e) => {
+                    return Ok(http_util::json_response(
+                        400,
+                        &serde_json::json!({ "error": "BAD_REQUEST", "message": e }),
+                    ));
+                }
+            };
 
             if method == http::Method::OPTIONS {
                 return Ok(api::route_options());
@@ -75,9 +102,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         None => not_found(),
                     }
                 }
-                ("GET", p) if p.starts_with("/v1/services/") && p.ends_with("/subscriptions") => {
+                // Subscriptions: POST so auth data (message+sig) stays in the body,
+                // not query params where it would appear in server logs (BUG-04/UX-05).
+                ("POST", p) if p.starts_with("/v1/services/") && p.ends_with("/subscriptions") => {
                     match api::parse_service_wallet(p, "/subscriptions") {
-                        Some(wallet) => api::handle_list_subscriptions(state, wallet, &query).await,
+                        Some(wallet) => api::handle_list_subscriptions(state, wallet, body).await,
                         None => not_found(),
                     }
                 }
@@ -87,6 +116,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     api::handle_introspect(state, auth.as_deref()).await
                 }
                 ("GET", "/v1/revocations") => api::handle_revocations(state, &query).await,
+                // Unauthenticated service info — lets sellers check registration without re-registering.
+                ("GET", p) if p.starts_with("/v1/info/") => {
+                    let service_id = p.trim_start_matches("/v1/info/").to_string();
+                    if service_id.is_empty() {
+                        not_found()
+                    } else {
+                        api::handle_service_info(state, service_id).await
+                    }
+                }
                 _ => not_found(),
             };
 
@@ -97,8 +135,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 fn not_found() -> Response<Body> {
-    Response::builder()
+    let builder = Response::builder()
         .status(StatusCode::NOT_FOUND)
+        .header("Content-Type", "text/plain");
+    http_util::add_cors_headers(builder)
         .body(Body::Text("Not found".into()))
         .unwrap()
 }
