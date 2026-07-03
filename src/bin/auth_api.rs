@@ -16,25 +16,25 @@ fn init_tracing() {
 
 async fn body_to_string(body: Body) -> Result<String, String> {
     const MAX_BODY_SIZE: usize = 1_048_576; // 1MB
+
+    // Check size first to avoid duplication
+    let len = match &body {
+        Body::Text(s) => s.len(),
+        Body::Binary(b) => b.len(),
+        Body::Empty => 0,
+    };
+
+    if len > MAX_BODY_SIZE {
+        return Err(format!(
+            "request body too large: {} bytes (max {})",
+            len, MAX_BODY_SIZE
+        ));
+    }
+
+    // Convert body after size check passes
     match body {
-        Body::Text(s) => {
-            if s.len() > MAX_BODY_SIZE {
-                return Err(format!(
-                    "request body too large: {} bytes (max {})",
-                    s.len(),
-                    MAX_BODY_SIZE
-                ));
-            }
-            Ok(s)
-        }
+        Body::Text(s) => Ok(s),
         Body::Binary(b) => {
-            if b.len() > MAX_BODY_SIZE {
-                return Err(format!(
-                    "request body too large: {} bytes (max {})",
-                    b.len(),
-                    MAX_BODY_SIZE
-                ));
-            }
             String::from_utf8(b).map_err(|_| "request body is not valid UTF-8".to_string())
         }
         Body::Empty => Ok(String::new()),
