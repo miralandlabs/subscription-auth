@@ -19,10 +19,11 @@ Every SQL call through `AuthDb` only:
 1. `timeout(20s, pool.get())`
 2. `BEGIN` → `SET LOCAL statement_timeout = '25s'` → `DEALLOCATE ALL` (hard fail) → query → `COMMIT`
 3. Wrap every wire step in tokio `timeout`
-4. `RecyclingMethod::Clean`, `max_size: 5`
-5. **Never** raw SQL in handlers
-6. Migrations: manual `psql` only — never auto-run on deploy
-7. Any `NNN_*.sql` change **must** duplicate in `init.sql`
+4. `RecyclingMethod::Fast`, `max_size: 5` — **why Fast, not Clean:** on Supabase transaction pooler, `Clean` runs a SQL health check before reuse; when the pooler is slow or stressed, that check fails and destroys good connections, emptying the pool and causing `BEGIN` timeouts. `Fast` only checks the socket is still open. Poisoned connections are dropped via `Client::take()` on error paths (same solrisk discipline).
+5. `/challenge` nonce rate-limit + insert: **one transaction** (`insert_challenge_nonce`) — one pool checkout per request
+6. **Never** raw SQL in handlers
+7. Migrations: manual `psql` only — never auto-run on deploy
+8. Any `NNN_*.sql` change **must** duplicate in `init.sql`
 
 ## Verify before done
 
