@@ -1,4 +1,5 @@
 //! Postgres access — solrisk hardened transaction pattern (SET LOCAL, DEALLOCATE, timeouts).
+//! Every pool checkout runs inside a transaction (BEGIN … COMMIT); no bare queries on the client.
 
 use {
     chrono::{DateTime, Utc},
@@ -751,9 +752,9 @@ impl AuthDb {
         tags: &[String],
         q: Option<&str>,
     ) -> Result<i64, Error> {
-        let client = self.conn().await?;
         let tag_json: Value = serde_json::json!(tags);
         let q_pattern = q.map(|s| format!("%{s}%"));
+        let client = self.conn().await?;
         let row = self
             .query_opt_in_tx(
                 client,
@@ -785,13 +786,11 @@ impl AuthDb {
         limit: i64,
         cursor: Option<(DateTime<Utc>, String)>,
     ) -> Result<(Vec<MarketplaceRow>, bool, i64), Error> {
-        let total = self
-            .count_marketplace_subscriptions(category, tags, q)
-            .await?;
         let fetch_limit = limit + 1;
         let tag_json: Value = serde_json::json!(tags);
         let q_pattern = q.map(|s| format!("%{s}%"));
 
+        // Single query with window count — one pool checkout, one transaction.
         let client = self.conn().await?;
         let rows = match cursor {
             Some((updated_at, service_id)) => {
@@ -799,7 +798,8 @@ impl AuthDb {
                     client,
                     r#"
                     SELECT service_id, merchant_wallet, service_url, resources_allowlist,
-                           tier_bundles, status, created_at, updated_at
+                           tier_bundles, status, created_at, updated_at,
+                           COUNT(*) OVER()::bigint AS total_count
                     FROM subscription_auth_services
                     WHERE status = 'active'
                       AND ($1::text IS NULL OR category = $1)
@@ -831,7 +831,8 @@ impl AuthDb {
                     client,
                     r#"
                     SELECT service_id, merchant_wallet, service_url, resources_allowlist,
-                           tier_bundles, status, created_at, updated_at
+                           tier_bundles, status, created_at, updated_at,
+                           COUNT(*) OVER()::bigint AS total_count
                     FROM subscription_auth_services
                     WHERE status = 'active'
                       AND ($1::text IS NULL OR category = $1)
@@ -852,6 +853,10 @@ impl AuthDb {
             }
         };
 
+        let total = rows
+            .first()
+            .map(|r| r.get::<_, i64>("total_count"))
+            .unwrap_or(0);
         let has_more = rows.len() as i64 > limit;
         let take = rows.len().min(limit as usize);
         let items = rows
@@ -901,7 +906,7 @@ impl AuthDb {
         }))
     }
 
-    // --- Transaction helpers (solrisk pattern) ---
+    // --- Transaction helpers (solrisk pattern — all DB operations) ---
 
     async fn begin_transaction(client: &Client, label: &str) -> Result<(), Error> {
         timeout(Self::TX_BEGIN_TIMEOUT, client.batch_execute("BEGIN"))
