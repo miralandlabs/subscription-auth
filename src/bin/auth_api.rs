@@ -116,6 +116,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     api::handle_introspect(state, auth.as_deref()).await
                 }
                 ("GET", "/v1/revocations") => api::handle_revocations(state, &query).await,
+                ("GET", "/v1/marketplace/subscriptions") => {
+                    api::handle_marketplace_list(state, &query).await
+                }
+                ("GET", p) if p.starts_with("/v1/marketplace/subscriptions/") => {
+                    let service_id = p
+                        .trim_start_matches("/v1/marketplace/subscriptions/")
+                        .to_string();
+                    if service_id.is_empty() {
+                        not_found()
+                    } else {
+                        api::handle_marketplace_detail(state, service_id).await
+                    }
+                }
                 // Unauthenticated service info — lets sellers check registration without re-registering.
                 ("GET", p) if p.starts_with("/v1/info/") => {
                     let service_id = p.trim_start_matches("/v1/info/").to_string();

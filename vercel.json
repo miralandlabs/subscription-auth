@@ -29,6 +29,8 @@
     { "src": "/v1/tokens/revoke", "dest": "/src/bin/auth_api", "methods": ["POST", "OPTIONS"] },
     { "src": "/v1/tokens/introspect", "dest": "/src/bin/auth_api", "methods": ["POST", "OPTIONS"] },
     { "src": "/v1/revocations", "dest": "/src/bin/auth_api", "methods": ["GET", "OPTIONS"] },
-    { "src": "/v1/info/(?<service_id>[^/]+)", "dest": "/src/bin/auth_api", "methods": ["GET", "OPTIONS"] }
+    { "src": "/v1/info/(?<service_id>[^/]+)", "dest": "/src/bin/auth_api", "methods": ["GET", "OPTIONS"] },
+    { "src": "/v1/marketplace/subscriptions", "dest": "/src/bin/auth_api", "methods": ["GET", "OPTIONS"] },
+    { "src": "/v1/marketplace/subscriptions/(?<service_id>.+)", "dest": "/src/bin/auth_api", "methods": ["GET", "OPTIONS"] }
   ]
 }

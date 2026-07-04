@@ -1,3 +1,4 @@
+mod marketplace;
 mod resources;
 
 use {
@@ -11,15 +12,17 @@ use {
 
 use crate::{
     challenge_auth::{self, minify_json_array, Action, ChallengeBuildParams, ParsedChallenge},
-    db::{ChallengeNonceOutcome, ServiceRow},
+    db::{ChallengeNonceOutcome, InsertServiceParams, ServiceRow},
     error::{into_vercel_response, Error},
     http_util::{cors_options, json_response, parse_wallet_path},
     jwt::{self, decode_bearer_token, decode_unverified_claims},
     service_id::validate_service_id,
     state::AppState,
+    tier_bundles::{extract_catalog_index, validate_tier_bundles},
     tiers::{self, tier_label},
 };
 
+pub use marketplace::{handle_marketplace_detail, handle_marketplace_list};
 pub use resources::resources_subset_of_allowlist;
 
 const CHALLENGE_TTL_SEC: u64 = 600;
@@ -329,16 +332,22 @@ pub async fn handle_register(
             return Err(Error::Conflict("service_id already registered".into()));
         }
 
+        validate_tier_bundles(body.tier_bundles.as_ref())?;
+
         let allowlist_value: Value = serde_json::from_str(&allowlist_json)
             .map_err(|e| Error::BadRequest(format!("allowlist json: {e}")))?;
 
-        db.insert_service(
-            &body.service_id,
-            &wallet,
-            &body.service_url,
-            &allowlist_value,
-            body.tier_bundles.as_ref(),
-        )
+        let (category, tags) = extract_catalog_index(body.tier_bundles.as_ref());
+
+        db.insert_service(InsertServiceParams {
+            service_id: &body.service_id,
+            merchant_wallet: &wallet,
+            service_url: &body.service_url,
+            resources_allowlist: &allowlist_value,
+            tier_bundles: body.tier_bundles.as_ref(),
+            category: category.as_deref(),
+            tags: &tags,
+        })
         .await
         .map_err(|e| Error::Internal(e.to_string()))?;
 
@@ -393,8 +402,18 @@ pub async fn handle_update(
             return Err(Error::Unauthorized("not service merchant".into()));
         }
 
+        if body.tier_bundles.is_some() {
+            validate_tier_bundles(body.tier_bundles.as_ref())?;
+        }
+
         let allowlist_value: Value = serde_json::from_str(&allowlist_json)
             .map_err(|e| Error::BadRequest(format!("allowlist json: {e}")))?;
+
+        let (category, tags) = if body.tier_bundles.is_some() {
+            extract_catalog_index(body.tier_bundles.as_ref())
+        } else {
+            (None, json!([]))
+        };
 
         let updated = state
             .require_db()?
@@ -403,6 +422,12 @@ pub async fn handle_update(
                 &wallet,
                 &allowlist_value,
                 body.tier_bundles.as_ref(),
+                category.as_deref(),
+                if body.tier_bundles.is_some() {
+                    Some(&tags)
+                } else {
+                    None
+                },
             )
             .await
             .map_err(|e| Error::Internal(e.to_string()))?;
@@ -761,6 +786,7 @@ pub async fn handle_service_info(state: Arc<AppState>, service_id: String) -> Re
             "service_url": row.service_url,
             "merchant_wallet": row.merchant_wallet,
             "resources_allowlist": row.resources_allowlist,
+            "tier_bundles": row.tier_bundles,
         }))
     }
     .await;

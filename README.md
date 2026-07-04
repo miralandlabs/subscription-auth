@@ -27,6 +27,7 @@ Payment (`402` + pr402) stays on **your seller** — this service only signs JWT
    ```bash
    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/init.sql
    ```
+   Existing databases (pre–marketplace catalog): also run `migrations/004_marketplace_schema.sql`.
 2. RSA keypair:
    ```bash
    openssl genrsa -out private.pem 2048
@@ -50,6 +51,11 @@ Payment (`402` + pr402) stays on **your seller** — this service only signs JWT
 | POST | `/v1/tokens/revoke` | Wallet sig |
 | POST | `/v1/tokens/introspect` | Bearer token |
 | GET | `/v1/revocations?service_id=&since=` | — |
+| GET | `/v1/marketplace/subscriptions` | Public subscription catalog (list) |
+| GET | `/v1/marketplace/subscriptions/{service_id}` | Catalog detail |
+| GET | `/v1/info/{service_id}` | Registration status (+ `tier_bundles`) |
+
+Catalog design: [docs/SERVICE_MARKETPLACE.md](docs/SERVICE_MARKETPLACE.md). Human UI: [pr402-registry](https://registry.pr402.org) → **Subscriptions** tab.
 
 Challenge domain: `x402 subscription auth v1` — see `src/challenge_auth.rs`.
 

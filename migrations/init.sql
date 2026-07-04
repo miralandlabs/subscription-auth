@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS subscription_auth_services (
     service_url           TEXT NOT NULL,
     resources_allowlist   JSONB NOT NULL DEFAULT '[]'::jsonb,
     tier_bundles          JSONB,
+    category              TEXT,
+    tags                  JSONB NOT NULL DEFAULT '[]'::jsonb,
     status                TEXT NOT NULL DEFAULT 'active'
                           CHECK (status IN ('active', 'retired')),
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -18,6 +20,18 @@ CREATE INDEX IF NOT EXISTS idx_subscription_auth_services_wallet
 
 CREATE INDEX IF NOT EXISTS idx_subscription_auth_services_wallet_status
     ON subscription_auth_services (merchant_wallet, status)
+    WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_subscription_auth_services_category
+    ON subscription_auth_services (category)
+    WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_subscription_auth_services_tags
+    ON subscription_auth_services USING GIN (tags)
+    WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_subscription_auth_services_marketplace_list
+    ON subscription_auth_services (updated_at DESC, service_id)
     WHERE status = 'active';
 
 CREATE TABLE IF NOT EXISTS subscription_auth_tokens (
