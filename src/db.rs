@@ -28,6 +28,28 @@ pub struct ServiceRow {
 }
 
 #[derive(Clone, Debug)]
+pub struct MarketplaceRow {
+    pub service_id: String,
+    pub merchant_wallet: String,
+    pub service_url: String,
+    pub resources_allowlist: Value,
+    pub tier_bundles: Option<Value>,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+pub struct InsertServiceParams<'a> {
+    pub service_id: &'a str,
+    pub merchant_wallet: &'a str,
+    pub service_url: &'a str,
+    pub resources_allowlist: &'a Value,
+    pub tier_bundles: Option<&'a Value>,
+    pub category: Option<&'a str>,
+    pub tags: &'a Value,
+}
+
+#[derive(Clone, Debug)]
 pub struct TokenRow {
     pub jti: Uuid,
     pub service_id: String,
@@ -366,28 +388,23 @@ impl AuthDb {
         }))
     }
 
-    pub async fn insert_service(
-        &self,
-        service_id: &str,
-        merchant_wallet: &str,
-        service_url: &str,
-        resources_allowlist: &Value,
-        tier_bundles: Option<&Value>,
-    ) -> Result<(), Error> {
+    pub async fn insert_service(&self, params: InsertServiceParams<'_>) -> Result<(), Error> {
         let client = self.conn().await?;
         self.exec_in_tx(
             client,
             r#"
             INSERT INTO subscription_auth_services
-                (service_id, merchant_wallet, service_url, resources_allowlist, tier_bundles)
-            VALUES ($1, $2, $3, $4, $5)
+                (service_id, merchant_wallet, service_url, resources_allowlist, tier_bundles, category, tags)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
             &[
-                &service_id,
-                &merchant_wallet,
-                &service_url,
-                &resources_allowlist,
-                &tier_bundles,
+                &params.service_id,
+                &params.merchant_wallet,
+                &params.service_url,
+                &params.resources_allowlist,
+                &params.tier_bundles,
+                &params.category,
+                &params.tags,
             ],
             "insert service",
         )
@@ -401,10 +418,35 @@ impl AuthDb {
         merchant_wallet: &str,
         resources_allowlist: &Value,
         tier_bundles: Option<&Value>,
+        category: Option<&str>,
+        tags: Option<&Value>,
     ) -> Result<bool, Error> {
         let client = self.conn().await?;
-        let rows = self
-            .exec_in_tx(
+        let rows = if let (Some(cat), Some(tag_val)) = (category, tags) {
+            self.exec_in_tx(
+                client,
+                r#"
+                UPDATE subscription_auth_services
+                SET resources_allowlist = $3,
+                    tier_bundles = $4,
+                    category = $5,
+                    tags = $6,
+                    updated_at = NOW()
+                WHERE service_id = $1 AND merchant_wallet = $2 AND status = 'active'
+                "#,
+                &[
+                    &service_id,
+                    &merchant_wallet,
+                    &resources_allowlist,
+                    &tier_bundles,
+                    &cat,
+                    &tag_val,
+                ],
+                "update service",
+            )
+            .await?
+        } else {
+            self.exec_in_tx(
                 client,
                 r#"
                 UPDATE subscription_auth_services
@@ -421,7 +463,8 @@ impl AuthDb {
                 ],
                 "update service",
             )
-            .await?;
+            .await?
+        };
         Ok(rows > 0)
     }
 
@@ -700,6 +743,162 @@ impl AuthDb {
             })
             .collect();
         Ok((items, has_more))
+    }
+
+    pub async fn count_marketplace_subscriptions(
+        &self,
+        category: Option<&str>,
+        tags: &[String],
+        q: Option<&str>,
+    ) -> Result<i64, Error> {
+        let client = self.conn().await?;
+        let tag_json: Value = serde_json::json!(tags);
+        let q_pattern = q.map(|s| format!("%{s}%"));
+        let row = self
+            .query_opt_in_tx(
+                client,
+                r#"
+                SELECT COUNT(*)::bigint AS n
+                FROM subscription_auth_services
+                WHERE status = 'active'
+                  AND ($1::text IS NULL OR category = $1)
+                  AND ($2::jsonb = '[]'::jsonb OR tags @> $2::jsonb)
+                  AND (
+                    $3::text IS NULL
+                    OR service_id ILIKE $3
+                    OR tier_bundles->'display'->>'name' ILIKE $3
+                    OR tier_bundles->'display'->>'tagline' ILIKE $3
+                  )
+                "#,
+                &[&category, &tag_json, &q_pattern],
+                "count marketplace subscriptions",
+            )
+            .await?;
+        Ok(row.map(|r| r.get::<_, i64>("n")).unwrap_or(0))
+    }
+
+    pub async fn list_marketplace_subscriptions(
+        &self,
+        category: Option<&str>,
+        tags: &[String],
+        q: Option<&str>,
+        limit: i64,
+        cursor: Option<(DateTime<Utc>, String)>,
+    ) -> Result<(Vec<MarketplaceRow>, bool, i64), Error> {
+        let total = self
+            .count_marketplace_subscriptions(category, tags, q)
+            .await?;
+        let fetch_limit = limit + 1;
+        let tag_json: Value = serde_json::json!(tags);
+        let q_pattern = q.map(|s| format!("%{s}%"));
+
+        let client = self.conn().await?;
+        let rows = match cursor {
+            Some((updated_at, service_id)) => {
+                self.query_in_tx(
+                    client,
+                    r#"
+                    SELECT service_id, merchant_wallet, service_url, resources_allowlist,
+                           tier_bundles, status, created_at, updated_at
+                    FROM subscription_auth_services
+                    WHERE status = 'active'
+                      AND ($1::text IS NULL OR category = $1)
+                      AND ($2::jsonb = '[]'::jsonb OR tags @> $2::jsonb)
+                      AND (
+                        $3::text IS NULL
+                        OR service_id ILIKE $3
+                        OR tier_bundles->'display'->>'name' ILIKE $3
+                        OR tier_bundles->'display'->>'tagline' ILIKE $3
+                      )
+                      AND (updated_at, service_id) < ($4, $5)
+                    ORDER BY updated_at DESC, service_id DESC
+                    LIMIT $6
+                    "#,
+                    &[
+                        &category,
+                        &tag_json,
+                        &q_pattern,
+                        &updated_at,
+                        &service_id,
+                        &fetch_limit,
+                    ],
+                    "list marketplace subscriptions",
+                )
+                .await?
+            }
+            None => {
+                self.query_in_tx(
+                    client,
+                    r#"
+                    SELECT service_id, merchant_wallet, service_url, resources_allowlist,
+                           tier_bundles, status, created_at, updated_at
+                    FROM subscription_auth_services
+                    WHERE status = 'active'
+                      AND ($1::text IS NULL OR category = $1)
+                      AND ($2::jsonb = '[]'::jsonb OR tags @> $2::jsonb)
+                      AND (
+                        $3::text IS NULL
+                        OR service_id ILIKE $3
+                        OR tier_bundles->'display'->>'name' ILIKE $3
+                        OR tier_bundles->'display'->>'tagline' ILIKE $3
+                      )
+                    ORDER BY updated_at DESC, service_id DESC
+                    LIMIT $4
+                    "#,
+                    &[&category, &tag_json, &q_pattern, &fetch_limit],
+                    "list marketplace subscriptions",
+                )
+                .await?
+            }
+        };
+
+        let has_more = rows.len() as i64 > limit;
+        let take = rows.len().min(limit as usize);
+        let items = rows
+            .iter()
+            .take(take)
+            .map(|r| MarketplaceRow {
+                service_id: r.get("service_id"),
+                merchant_wallet: r.get("merchant_wallet"),
+                service_url: r.get("service_url"),
+                resources_allowlist: r.get("resources_allowlist"),
+                tier_bundles: r.get("tier_bundles"),
+                status: r.get("status"),
+                created_at: r.get("created_at"),
+                updated_at: r.get("updated_at"),
+            })
+            .collect();
+        Ok((items, has_more, total))
+    }
+
+    pub async fn get_marketplace_subscription(
+        &self,
+        service_id: &str,
+    ) -> Result<Option<MarketplaceRow>, Error> {
+        let client = self.conn().await?;
+        let row = self
+            .query_opt_in_tx(
+                client,
+                r#"
+                SELECT service_id, merchant_wallet, service_url, resources_allowlist,
+                       tier_bundles, status, created_at, updated_at
+                FROM subscription_auth_services
+                WHERE service_id = $1 AND status = 'active'
+                "#,
+                &[&service_id],
+                "get marketplace subscription",
+            )
+            .await?;
+        Ok(row.map(|r| MarketplaceRow {
+            service_id: r.get("service_id"),
+            merchant_wallet: r.get("merchant_wallet"),
+            service_url: r.get("service_url"),
+            resources_allowlist: r.get("resources_allowlist"),
+            tier_bundles: r.get("tier_bundles"),
+            status: r.get("status"),
+            created_at: r.get("created_at"),
+            updated_at: r.get("updated_at"),
+        }))
     }
 
     // --- Transaction helpers (solrisk pattern) ---

@@ -8,4 +8,5 @@ pub mod jwks;
 pub mod jwt;
 pub mod service_id;
 pub mod state;
+pub mod tier_bundles;
 pub mod tiers;
